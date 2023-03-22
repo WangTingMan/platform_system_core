@@ -47,6 +47,8 @@
 # define __android_unused __attribute__((__unused__))
 #endif
 
+#include <base/threading/platform_thread.h>
+
 /*
  * ===========================================================================
  *      Thread wrappers
@@ -185,6 +187,11 @@ android_thread_id_t androidGetThreadId()
 #else // !defined(_WIN32)
 // ----------------------------------------------------------------------------
 
+void androidSetThreadName( const char* name )
+{
+    base::PlatformThread::SetName( name );
+}
+
 /*
  * Trampoline to make us __stdcall-compliant.
  *
@@ -194,7 +201,8 @@ struct threadDetails {
     int (*func)(void*);
     void* arg;
 };
-static __stdcall unsigned int threadIntermediary(void* vDetails)
+
+extern "C" unsigned int threadIntermediary(void* vDetails)
 {
     struct threadDetails* pDetails = (struct threadDetails*) vDetails;
     int result;
@@ -230,7 +238,7 @@ static bool doCreateThread(android_thread_func_t fn, void* arg, android_thread_i
     if (hThread == NULL)
 #endif
     {
-        ALOG(LOG_WARN, "thread", "WARNING: thread create failed\n");
+        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: thread create failed\n");
         return false;
     }
 
@@ -379,7 +387,7 @@ status_t Mutex::lock()
 void Mutex::unlock()
 {
     if (!ReleaseMutex((HANDLE) mState))
-        ALOG(LOG_WARN, "thread", "WARNING: bad result from unlocking mutex\n");
+        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: bad result from unlocking mutex\n");
 }
 
 status_t Mutex::tryLock()
@@ -388,7 +396,7 @@ status_t Mutex::tryLock()
 
     dwWaitResult = WaitForSingleObject((HANDLE) mState, 0);
     if (dwWaitResult != WAIT_OBJECT_0 && dwWaitResult != WAIT_TIMEOUT)
-        ALOG(LOG_WARN, "thread", "WARNING: bad result from try-locking mutex\n");
+        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: bad result from try-locking mutex\n");
     return (dwWaitResult == WAIT_OBJECT_0) ? 0 : -1;
 }
 

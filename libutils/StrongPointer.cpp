@@ -15,10 +15,37 @@
  */
 
 #define LOG_TAG "sp"
+#define NOMINMAX
+
+#include <utils/StrongPointer.h>
 
 #include <log/log.h>
+#include <type_traits>
+#include <utility>
+#include <algorithm>
+
+#ifdef _MSC_VER
+#include <windows.h>
+#endif
 
 namespace android {
 
 void sp_report_race() { LOG_ALWAYS_FATAL("sp<> assignment detected data race"); }
+
+void* retrieve_frame_address( int level )
+{
+#ifdef _MSC_VER
+    int count_ = 0;
+    constexpr int kMaxTraces = 62;
+    void* trace_[kMaxTraces + 1];
+    int get_count = std::min( kMaxTraces, level );
+    count_ = CaptureStackBackTrace( 0, kMaxTraces, trace_, NULL );
+    int index = std::min( kMaxTraces, std::min( count_, level ) );
+    return ( trace_[index] );
+#else
+    return ( __builtin_frame_address( level ) );
+#endif
+    return 0;
+}
+
 }

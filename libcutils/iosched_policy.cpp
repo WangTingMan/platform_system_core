@@ -21,7 +21,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #if defined(__ANDROID__)
 #define IOPRIO_WHO_PROCESS (1)
@@ -29,7 +28,11 @@
 #include <sys/syscall.h>
 #define __android_unused
 #else
+#ifdef _WIN32
+#define __android_unused
+#else
 #define __android_unused __attribute__((__unused__))
+#endif
 #endif
 
 int android_set_ioprio(int pid __android_unused, IoSchedClass clazz __android_unused, int ioprio __android_unused) {

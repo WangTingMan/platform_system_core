@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <time.h>
 
-#include <android-base/macros.h>
 #include <utils/Log.h>
 
 static constexpr size_t clock_id_max = 5;
@@ -28,6 +27,10 @@ static constexpr size_t clock_id_max = 5;
 static void checkClockId(int clock) {
     LOG_ALWAYS_FATAL_IF(clock < 0 || clock >= clock_id_max, "invalid clock id");
 }
+
+#ifdef _MSC_VER
+extern int64_t GetSystemInternal();
+#endif
 
 #if defined(__linux__)
 nsecs_t systemTime(int clock) {
@@ -45,12 +48,16 @@ nsecs_t systemTime(int clock) {
     // TODO: is this ever called with anything but REALTIME on mac/windows?
     checkClockId(clock);
 
+#ifdef _MSC_VER
+    return GetSystemInternal();
+#else
     // Clock support varies widely across hosts. Mac OS doesn't support
     // CLOCK_BOOTTIME (and doesn't even have clock_gettime until 10.12).
     // Windows is windows.
     timeval t = {};
     gettimeofday(&t, nullptr);
-    return nsecs_t(t.tv_sec)*1000000000LL + nsecs_t(t.tv_usec)*1000LL;
+    return nsecs_t( t.tv_sec ) * 1000000000LL + nsecs_t( t.tv_usec ) * 1000LL;
+#endif
 }
 #endif
 

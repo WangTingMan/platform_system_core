@@ -14,19 +14,24 @@
 ** See the License for the specific language governing permissions and 
 ** limitations under the License.
 */
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 
 #include <cutils/record_stream.h>
 
 #include <stdlib.h>
-#include <unistd.h>
 #include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
 #if defined(_WIN32)
 #include <winsock2.h>   /* for ntohl */
+#include <windows.h>
+#include <corecrt_io.h>
+#pragma comment(lib,"ws2_32.lib")
 #else
 #include <netinet/in.h>
+#include <unistd.h>
 #endif
 
 #define HEADER_SIZE 4

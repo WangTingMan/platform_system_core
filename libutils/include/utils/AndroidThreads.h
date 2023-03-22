@@ -24,7 +24,9 @@
 # include <pthread.h>
 #endif
 
-#include <utils/ThreadDefs.h>
+#include <utils/ThreadDefs.h>  
+
+#include <utils/utils_export.h>
 
 // ---------------------------------------------------------------------------
 // C API
@@ -34,10 +36,10 @@ extern "C" {
 #endif
 
 // Create and run a new thread.
-extern int androidCreateThread(android_thread_func_t, void *);
+UTILS_EXPORT int androidCreateThread(android_thread_func_t, void *);
 
 // Create thread with lots of parameters
-extern int androidCreateThreadEtc(android_thread_func_t entryFunction,
+UTILS_EXPORT int androidCreateThreadEtc(android_thread_func_t entryFunction,
                                   void *userData,
                                   const char* threadName,
                                   int32_t threadPriority,
@@ -45,11 +47,11 @@ extern int androidCreateThreadEtc(android_thread_func_t entryFunction,
                                   android_thread_id_t *threadId);
 
 // Get some sort of unique identifier for the current thread.
-extern android_thread_id_t androidGetThreadId();
+UTILS_EXPORT android_thread_id_t androidGetThreadId();
 
 // Low-level thread creation -- never creates threads that can
 // interact with the Java VM.
-extern int androidCreateRawThreadEtc(android_thread_func_t entryFunction,
+UTILS_EXPORT int androidCreateRawThreadEtc(android_thread_func_t entryFunction,
                                      void *userData,
                                      const char* threadName,
                                      int32_t threadPriority,
@@ -57,7 +59,7 @@ extern int androidCreateRawThreadEtc(android_thread_func_t entryFunction,
                                      android_thread_id_t *threadId);
 
 // set the same of the running thread
-extern void androidSetThreadName(const char* name);
+UTILS_EXPORT void androidSetThreadName(const char* name);
 
 // Used by the Java Runtime to control how threads are created, so that
 // they can be proper and lovely Java threads.
@@ -68,7 +70,7 @@ typedef int (*android_create_thread_fn)(android_thread_func_t entryFunction,
                                         size_t threadStackSize,
                                         android_thread_id_t *threadId);
 
-extern void androidSetCreateThreadFunc(android_create_thread_fn func);
+UTILS_EXPORT void androidSetCreateThreadFunc(android_create_thread_fn func);
 
 // ------------------------------------------------------------------
 // Extra functions working with raw pids.

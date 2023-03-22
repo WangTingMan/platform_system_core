@@ -18,6 +18,7 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include "cutils/cutils_export.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,7 +26,12 @@ extern "C" {
 
 #if defined(__GLIBC__) || defined(_WIN32)
 /* Declaration of strlcpy() for platforms that don't already have it. */
-size_t strlcpy(char *dst, const char *src, size_t size);
+CUTILS_EXPORT size_t strlcpy(char *dst, const char *src, size_t size);
+
+CUTILS_EXPORT char* strtok_r(char* str, const char* delim, char** saveptr);
+
+CUTILS_EXPORT size_t strlcat(char* dest, const char* src, size_t destsz);
+
 #endif
 
 #ifdef __cplusplus

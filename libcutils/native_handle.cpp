@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 
 #include <cutils/native_handle.h>
 
@@ -20,7 +22,12 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <corecrt_io.h>
+#else
 #include <unistd.h>
+#endif
 
 native_handle_t* native_handle_init(char* storage, int numFds, int numInts) {
     if ((uintptr_t) storage % alignof(native_handle_t)) {

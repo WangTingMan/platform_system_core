@@ -19,8 +19,29 @@
 
 #include <stdbool.h>
 #include <string.h>
-#include <strings.h>
-#include <sys/cdefs.h>
+#include <stdint.h>
+
+#ifdef _MSC_VER
+#  include <intrin.h>
+#  define __builtin_popcount __popcnt
+#  define __builtin_popcountll __popcnt64
+#endif
+
+#ifdef __cplusplus
+#ifndef __BEGIN_DECLS
+#define __BEGIN_DECLS extern "C" {
+#endif
+#else
+#define __BEGIN_DECLS
+#endif
+
+#ifdef __cplusplus
+#ifndef __END_DECLS
+#define __END_DECLS }
+#endif
+#else
+#define __END_DECLS
+#endif
 
 __BEGIN_DECLS
 
@@ -29,7 +50,7 @@ static inline int popcount(unsigned int x) {
 }
 
 static inline int popcountl(unsigned long x) {
-    return __builtin_popcountl(x);
+    return __builtin_popcount(x);
 }
 
 static inline int popcountll(unsigned long long x) {

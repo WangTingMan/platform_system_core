@@ -17,7 +17,8 @@
 //
 // Shared file mapping class.
 //
-
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #define LOG_TAG "filemap"
 
 #include <utils/FileMap.h>
@@ -33,8 +34,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if !defined(__MINGW32__)
+#if !defined(__MINGW32__) && !defined(_MSC_VER)
 #include <sys/mman.h>
+#endif
+
+#ifdef _WIN32
+#include <corecrt_io.h>
 #endif
 
 #include <string.h>
@@ -53,7 +58,7 @@ FileMap::FileMap(void)
       mBaseLength(0),
       mDataPtr(nullptr),
       mDataLength(0)
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
       ,
       mFileHandle(INVALID_HANDLE_VALUE),
       mFileMapping(NULL)
@@ -69,7 +74,7 @@ FileMap::FileMap(FileMap&& other) noexcept
       mDataOffset(other.mDataOffset),
       mDataPtr(other.mDataPtr),
       mDataLength(other.mDataLength)
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
       ,
       mFileHandle(other.mFileHandle),
       mFileMapping(other.mFileMapping)
@@ -78,7 +83,7 @@ FileMap::FileMap(FileMap&& other) noexcept
     other.mFileName = nullptr;
     other.mBasePtr = nullptr;
     other.mDataPtr = nullptr;
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
     other.mFileHandle = INVALID_HANDLE_VALUE;
     other.mFileMapping = NULL;
 #endif
@@ -95,7 +100,7 @@ FileMap& FileMap::operator=(FileMap&& other) noexcept {
     other.mFileName = nullptr;
     other.mBasePtr = nullptr;
     other.mDataPtr = nullptr;
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
     mFileHandle = other.mFileHandle;
     mFileMapping = other.mFileMapping;
     other.mFileHandle = INVALID_HANDLE_VALUE;
@@ -110,7 +115,7 @@ FileMap::~FileMap(void)
     if (mFileName != nullptr) {
         free(mFileName);
     }
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
     if (mBasePtr && UnmapViewOfFile(mBasePtr) == 0) {
         ALOGD("UnmapViewOfFile(%p) failed, error = %lu\n", mBasePtr,
               GetLastError() );
@@ -135,7 +140,7 @@ FileMap::~FileMap(void)
 bool FileMap::create(const char* origFileName, int fd, off64_t offset, size_t length,
         bool readOnly)
 {
-#if defined(__MINGW32__)
+#if defined(__MINGW32__) || defined(_MSC_VER)
     int     adjust;
     off64_t adjOffset;
     size_t  adjLength;

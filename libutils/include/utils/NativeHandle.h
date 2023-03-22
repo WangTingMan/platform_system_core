@@ -20,11 +20,13 @@
 #include <utils/RefBase.h>
 #include <utils/StrongPointer.h>
 
+#include <utils/utils_export.h>
+
 typedef struct native_handle native_handle_t;
 
 namespace android {
 
-class NativeHandle : public LightRefBase<NativeHandle> {
+class UTILS_EXPORT NativeHandle : public LightRefBase<NativeHandle> {
 public:
     // Create a refcounted wrapper around a native_handle_t, and declare
     // whether the wrapper owns the handle (so that it should clean up the

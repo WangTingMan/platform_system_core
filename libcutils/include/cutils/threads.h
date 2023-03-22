@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <cutils\cutils_export.h>
+
 #include  <sys/types.h>
 
 #if defined(_WIN32)
@@ -28,12 +30,49 @@
 extern "C" {
 #endif
 
+#ifndef pid_t
+#define pid_t int
+#endif
+
 //
 // Deprecated: use android::base::GetThreadId instead, which doesn't truncate on Mac/Windows.
 //
 #if !defined(__GLIBC__) || __GLIBC__ >= 2 && __GLIBC_MINOR__ < 32
-extern pid_t gettid();
+CUTILS_EXPORT pid_t gettid();
 #endif
+
+#if !defined(_WIN32)
+
+typedef struct
+{
+    pthread_mutex_t   lock;
+    int               has_tls;
+    pthread_key_t     tls;
+} thread_store_t;
+
+#define  THREAD_STORE_INITIALIZER  { PTHREAD_MUTEX_INITIALIZER, 0, 0 }
+
+#else // !defined(_WIN32)
+
+typedef struct
+{
+    int               lock_init;
+    int               has_tls;
+    DWORD             tls;
+    CRITICAL_SECTION  lock;
+} thread_store_t;
+
+#define  THREAD_STORE_INITIALIZER  { 0, 0, 0, {0, 0, 0, 0, 0, 0} }
+
+#endif // !defined(_WIN32)
+
+typedef void  ( *thread_store_destruct_t )( void* value );
+
+CUTILS_EXPORT void* thread_store_get( thread_store_t* store );
+
+CUTILS_EXPORT void thread_store_set( thread_store_t* store,
+    void* value,
+    thread_store_destruct_t  destroy );
 
 #ifdef __cplusplus
 }

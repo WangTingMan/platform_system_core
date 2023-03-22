@@ -24,11 +24,19 @@
 
 #include <sys/types.h>
 
+#include <utils/utils_export.h>
+
+#ifdef _MSC_VER
+#ifndef __attribute__
+#define __attribute__(...)
+#endif
+#endif
+
 namespace android {
 
 class ReferenceRenamer;
 
-void LightRefBase_reportIncStrongRequireStrongFailed(const void* thiz);
+UTILS_EXPORT void LightRefBase_reportIncStrongRequireStrongFailed(const void* thiz);
 
 template <class T>
 class LightRefBase

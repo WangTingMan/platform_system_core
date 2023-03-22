@@ -28,6 +28,8 @@
 #include <utils/Errors.h>
 #include <utils/Timers.h>
 
+#include <utils/utils_export.h>
+
 // Enable thread safety attributes only with clang.
 // The attributes can be safely erased when compiling with other compilers.
 #if defined(__clang__) && (!defined(SWIG))
@@ -91,7 +93,7 @@ class Condition;
  * The mutex must be unlocked by the thread that locked it.  They are not
  * recursive, i.e. the same thread can't lock it multiple times.
  */
-class CAPABILITY("mutex") Mutex {
+class UTILS_EXPORT CAPABILITY("mutex") Mutex {
   public:
     enum {
         PRIVATE = 0,

@@ -15,7 +15,7 @@
  */
 
 #include <utils/String16.h>
-
+#include <utils/uitils_overflow_check_ms.h>
 #include <utils/Log.h>
 
 #include <ctype.h>

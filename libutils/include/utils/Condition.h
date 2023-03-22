@@ -30,6 +30,8 @@
 #include <utils/Mutex.h>
 #include <utils/Timers.h>
 
+#include <utils/utils_export.h>
+
 // ---------------------------------------------------------------------------
 namespace android {
 // ---------------------------------------------------------------------------
@@ -49,7 +51,7 @@ namespace android {
  * the pthreads semantics, in particular, a boolean predicate must
  * be re-evaluated after a wake-up, as spurious wake-ups may happen.
  */
-class Condition {
+class UTILS_EXPORT Condition {
 public:
     enum {
         PRIVATE = 0,

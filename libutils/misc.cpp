@@ -18,7 +18,9 @@
 
 #include <utils/misc.h>
 
-#include <pthread.h>
+#include <thread>
+#include <mutex>
+#include <vector>
 
 #include <utils/Log.h>
 #include <utils/Vector.h>
@@ -39,13 +41,36 @@ struct sysprop_change_callback_info {
     int priority;
 };
 
-#if !defined(_WIN32)
-static pthread_mutex_t gSyspropMutex = PTHREAD_MUTEX_INITIALIZER;
-static Vector<sysprop_change_callback_info>* gSyspropList = nullptr;
+#if defined(_WIN32)
+    static std::mutex gSyspropMutex;
+    static std::vector<sysprop_change_callback_info> gSyspropList;
+#else
+    static pthread_mutex_t gSyspropMutex = PTHREAD_MUTEX_INITIALIZER;
+    static Vector<sysprop_change_callback_info>* gSyspropList = nullptr;
 #endif
 
-#if !defined(_WIN32)
 void add_sysprop_change_callback(sysprop_change_callback cb, int priority) {
+#if defined(_WIN32)
+   std::unique_lock<std::mutex> locker(gSyspropMutex);
+   sysprop_change_callback_info info;
+   info.callback = cb;
+   info.priority = priority;
+   bool added = false;
+   for (auto it = gSyspropList.begin(); it != gSyspropList.end(); ++it)
+   {
+        if( priority >= it->priority )
+        {
+            gSyspropList.insert(it,info);
+            added = true;
+            break;
+        }
+   }
+
+   if (!added)
+   {
+       gSyspropList.push_back(info);
+   }
+#else
     pthread_mutex_lock(&gSyspropMutex);
     if (gSyspropList == nullptr) {
         gSyspropList = new Vector<sysprop_change_callback_info>();
@@ -65,10 +90,8 @@ void add_sysprop_change_callback(sysprop_change_callback cb, int priority) {
         gSyspropList->add(info);
     }
     pthread_mutex_unlock(&gSyspropMutex);
-}
-#else
-void add_sysprop_change_callback(sysprop_change_callback, int) {}
 #endif
+}
 
 #if defined(__ANDROID__) && !defined(__ANDROID_RECOVERY__)
 void (*get_report_sysprop_change_func())() {
@@ -84,7 +107,6 @@ void (*get_report_sysprop_change_func())() {
 
 void report_sysprop_change() {
     do_report_sysprop_change();
-
 #if defined(__ANDROID__) && !defined(__ANDROID_RECOVERY__)
     // libutils.so is double loaded; from the default namespace and from the
     // 'sphal' namespace. Redirect the sysprop change event to the other instance
@@ -100,17 +122,22 @@ void report_sysprop_change() {
 };  // namespace android
 
 void do_report_sysprop_change() {
-#if !defined(_WIN32)
+#if defined(_WIN32)
+    std::unique_lock<std::mutex> locker(gSyspropMutex);
+    auto listeners = gSyspropList;
+    locker.unlock();
+#else
     pthread_mutex_lock(&gSyspropMutex);
     Vector<sysprop_change_callback_info> listeners;
     if (gSyspropList != nullptr) {
         listeners = *gSyspropList;
     }
     pthread_mutex_unlock(&gSyspropMutex);
+#endif
 
     //ALOGI("Reporting sysprop change to %d listeners", listeners.size());
     for (size_t i=0; i<listeners.size(); i++) {
         listeners[i].callback();
     }
-#endif
+
 }

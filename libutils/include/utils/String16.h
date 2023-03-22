@@ -24,6 +24,8 @@
 #include <utils/String8.h>
 #include <utils/TypeHelpers.h>
 
+#include <utils/utils_export.h>
+
 // ---------------------------------------------------------------------------
 
 namespace android {
@@ -36,7 +38,7 @@ class StaticString16;
 // DO NOT USE: please use std::u16string
 
 //! This is a string holding UTF-16 characters.
-class String16
+class UTILS_EXPORT String16
 {
 public:
                                 String16();

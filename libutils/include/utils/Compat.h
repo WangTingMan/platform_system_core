@@ -17,9 +17,11 @@
 #ifndef __LIB_UTILS_COMPAT_H
 #define __LIB_UTILS_COMPAT_H
 
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
-#if !defined(__MINGW32__)
+#if !defined(__MINGW32__) && !defined(_MSC_VER)
 #include <sys/mman.h>
 #endif
 
@@ -74,14 +76,14 @@ static inline int ftruncate64(int fd, off64_t length) {
 /* TEMP_FAILURE_RETRY is not available on macOS, but still useful there. */
 #ifndef TEMP_FAILURE_RETRY
 /* Used to retry syscalls that can return EINTR. */
-#define TEMP_FAILURE_RETRY(exp)                \
-    ({                                         \
-        __typeof__(exp) _rc;                   \
+#define TEMP_FAILURE_RETRY(ret, exp)           \
+    {                                          \
+        decltype(exp) _rc;                     \
         do {                                   \
             _rc = (exp);                       \
         } while (_rc == -1 && errno == EINTR); \
-        _rc;                                   \
-    })
+        ret = _rc;                             \
+    }
 #endif
 
 #if defined(_WIN32)

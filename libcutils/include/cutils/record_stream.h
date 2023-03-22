@@ -21,19 +21,26 @@
 #ifndef _CUTILS_RECORD_STREAM_H
 #define _CUTILS_RECORD_STREAM_H
 
+#include <cutils\cutils_export.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #include <stddef.h>
+#include <cstdint>
 
 typedef struct RecordStream RecordStream;
 
-extern RecordStream *record_stream_new(int fd, size_t maxRecordLen);
-extern void record_stream_free(RecordStream *p_rs);
+CUTILS_EXPORT  RecordStream *record_stream_new(int fd, size_t maxRecordLen);
+CUTILS_EXPORT  void record_stream_free(RecordStream *p_rs);
 
-extern int record_stream_get_next (RecordStream *p_rs, void ** p_outRecord, 
+CUTILS_EXPORT  int record_stream_get_next (RecordStream *p_rs, void ** p_outRecord,
                                     size_t *p_outRecordLen);
+
+#ifndef ssize_t
+#define ssize_t int64_t
+#endif
 
 #ifdef __cplusplus
 }

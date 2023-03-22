@@ -16,7 +16,12 @@
 
 #pragma once
 
+#include <cutils\cutils_export.h>
+
+#if __has_include(<sys/cdefs.h>)
 #include <sys/cdefs.h>
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,6 +44,15 @@ extern "C" {
 #define PROPERTY_KEY_MAX PROP_NAME_MAX
 #define PROPERTY_VALUE_MAX PROP_VALUE_MAX
 
+typedef int( *property_set_callback_type )( const char* key, const char* value );
+typedef int( *property_get_callback_type )( const char* key, char* value );
+
+/**
+ * This API just used for cross-platfrom, there is no such API in android.
+ */
+CUTILS_EXPORT void set_property_callback( property_set_callback_type set_callback,
+    property_get_callback_type get_callback );
+
 /* property_get: returns the length of the value which will never be
 ** greater than PROPERTY_VALUE_MAX - 1 and will always be zero terminated.
 ** (the length does not include the terminating zero).
@@ -46,7 +60,7 @@ extern "C" {
 ** If the property read fails or returns an empty value, the default
 ** value is used (if nonnull).
 */
-int property_get(const char* key, char* value, const char* default_value);
+CUTILS_EXPORT int property_get(const char* key, char* value, const char* default_value);
 
 /* property_get_bool: returns the value of key coerced into a
 ** boolean. If the property is not set, then the default value is returned.
@@ -62,7 +76,7 @@ int property_get(const char* key, char* value, const char* default_value);
 ** If no property with this key is set (or the key is NULL) or the boolean
 ** conversion fails, the default value is returned.
 **/
-int8_t property_get_bool(const char *key, int8_t default_value);
+CUTILS_EXPORT int8_t property_get_bool(const char *key, int8_t default_value);
 
 /* property_get_int64: returns the value of key truncated and coerced into a
 ** int64_t. If the property is not set, then the default value is used.
@@ -83,7 +97,7 @@ int8_t property_get_bool(const char *key, int8_t default_value);
 ** If no property with this key is set (or the key is NULL) or the numeric
 ** conversion fails, the default value is returned.
 **/
-int64_t property_get_int64(const char *key, int64_t default_value);
+CUTILS_EXPORT int64_t property_get_int64(const char *key, int64_t default_value);
 
 /* property_get_int32: returns the value of key truncated and coerced into an
 ** int32_t. If the property is not set, then the default value is used.
@@ -104,13 +118,15 @@ int64_t property_get_int64(const char *key, int64_t default_value);
 ** If no property with this key is set (or the key is NULL) or the numeric
 ** conversion fails, the default value is returned.
 **/
-int32_t property_get_int32(const char *key, int32_t default_value);
+CUTILS_EXPORT int32_t property_get_int32(const char *key, int32_t default_value);
 
 /* property_set: returns 0 on success, < 0 on failure
 */
-int property_set(const char *key, const char *value);
+CUTILS_EXPORT int property_set(const char *key, const char *value);
 
-int property_list(void (*propfn)(const char *key, const char *value, void *cookie), void *cookie);
+CUTILS_EXPORT int property_list(void (*propfn)(const char *key, const char *value, void *cookie), void *cookie);
+
+CUTILS_EXPORT void parse_property_from_ini( const char* file );
 
 #if defined(__BIONIC_FORTIFY)
 #define __property_get_err_str "property_get() called with too small of a buffer"

@@ -29,6 +29,10 @@
 
 #include "SharedBuffer.h"
 
+#ifdef _MSC_VER
+#include "utils/uitils_overflow_check_ms.h"
+#endif
+
 /*
  * Functions outside android is below the namespace android, since they use
  * functions and constants in android namespace.

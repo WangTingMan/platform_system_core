@@ -21,6 +21,6 @@
  * For backwards compatibility only
  * New users should include processgroup/sched_policy.h directly
  */
-#include <processgroup/sched_policy.h>
+//#include <processgroup/sched_policy.h>
 
 #endif /* __CUTILS_SCHED_POLICY_H */ 

@@ -27,6 +27,8 @@
 #define __has_attribute(x) 0
 #endif
 
+#include <utils/utils_export.h>
+
 /*
  * Used to exclude some functions from CFI.
  */
@@ -286,7 +288,7 @@ TYPE* Vector<TYPE>::editArray() {
 template<class TYPE> inline
 const TYPE& Vector<TYPE>::operator[](size_t index) const {
     LOG_FATAL_IF(index>=size(),
-            "%s: index=%u out of range (%u)", __PRETTY_FUNCTION__,
+            "%s: index=%u out of range (%u)", __FUNCSIG__,
             int(index), int(size()));
     return *(array() + index);
 }

@@ -18,9 +18,12 @@
 
 #include <stdint.h>
 #include <sys/types.h>
-#include <sys/time.h>
+#include <time.h>
+#include <WinSock2.h>
 
 #include <utils/Compat.h>
+
+#include <utils/utils_export.h>
 
 // ------------------------------------------------------------------
 // C API
@@ -30,6 +33,12 @@ extern "C" {
 #endif
 
 typedef int64_t nsecs_t;       // nano-seconds
+
+struct timezone
+{
+    int tz_minuteswest; /* of Greenwich */
+    int tz_dsttime;     /* type of dst correction to apply */
+};
 
 static CONSTEXPR inline nsecs_t seconds_to_nanoseconds(nsecs_t secs)
 {
@@ -82,7 +91,7 @@ enum {
 
 // return the system-time according to the specified clock
 #ifdef __cplusplus
-nsecs_t systemTime(int clock = SYSTEM_TIME_MONOTONIC);
+UTILS_EXPORT nsecs_t systemTime(int clock = SYSTEM_TIME_MONOTONIC);
 #else
 nsecs_t systemTime(int clock);
 #endif // def __cplusplus
@@ -95,7 +104,31 @@ nsecs_t systemTime(int clock);
  * Otherwise, returns the difference between the reference time and timeout time
  * rounded up to the next millisecond.
  */
-int toMillisecondTimeoutDelay(nsecs_t referenceTime, nsecs_t timeoutTime);
+UTILS_EXPORT int toMillisecondTimeoutDelay(nsecs_t referenceTime, nsecs_t timeoutTime);
+
+UTILS_EXPORT int gettimeofday(struct timeval* p, struct timezone* z);
+
+#if defined(_MSC_VER)
+
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+
+UTILS_EXPORT int clock_gettime(int type, struct timespec* time);
+#endif
+
+typedef void (*timer_expired_callback_type)(void* para);
+typedef void (*timer_expired_callback_no_paras_type)();
+
+UTILS_EXPORT int common_timer_create(timer_expired_callback_type a_callback, void* a_user_data);
+
+UTILS_EXPORT int common_timer_create_no_paras(timer_expired_callback_no_paras_type a_callback);
+
+UTILS_EXPORT void stop_timer(int timer_id);
+
+UTILS_EXPORT void delete_timer(int timer_id);
+
+UTILS_EXPORT void set_timer_duration(int timer_id, int milliseconds);
 
 #ifdef __cplusplus
 } // extern "C"

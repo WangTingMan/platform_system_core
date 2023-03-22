@@ -21,6 +21,8 @@
 #include <sys/types.h>
 #include <string>
 
+#include <utils/utils_export.h>
+
 namespace android {
 
 /**
@@ -36,10 +38,13 @@ typedef int32_t status_t;
 
 enum {
     OK                = 0,    // Preferred constant for checking success.
-#ifndef NO_ERROR
+#ifdef NO_ERROR
     // Win32 #defines NO_ERROR as well.  It has the same value, so there's no
     // real conflict, though it's a bit awkward.
-    NO_ERROR          = OK,   // Deprecated synonym for `OK`. Prefer `OK` because it doesn't conflict with Windows.
+    ANDROID_NO_ERROR          = OK,   // Deprecated synonym for `OK`. Prefer `OK` because it doesn't conflict with Windows.
+#else
+    ANDROID_NO_ERROR = OK,
+    NO_ERROR = OK,
 #endif
 
     UNKNOWN_ERROR       = (-2147483647-1), // INT32_MIN value
@@ -72,6 +77,6 @@ enum {
 };
 
 // Human readable name of error
-std::string statusToString(status_t status);
+UTILS_EXPORT std::string statusToString(status_t status);
 
 }  // namespace android

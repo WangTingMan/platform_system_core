@@ -16,11 +16,18 @@
 
 #define LOG_TAG "unicode"
 
-#include <android-base/macros.h>
 #include <limits.h>
 #include <utils/Unicode.h>
 
 #include <log/log.h>
+
+#ifndef SSIZE_MAX
+#define SSIZE_MAX LLONG_MAX
+#endif
+
+#ifndef FALLTHROUGH_INTENDED
+#define FALLTHROUGH_INTENDED [[fallthrough]]
+#endif
 
 extern "C" {
 

@@ -20,7 +20,9 @@
 #include <utils/Errors.h>
 #include <utils/Log.h>
 
+#ifndef _MSC_VER
 #include <unwindstack/AndroidUnwinder.h>
+#endif
 
 #define CALLSTACK_WEAK  // Don't generate weak definitions.
 #include <utils/CallStack.h>
@@ -45,6 +47,8 @@ void CallStack::update(int32_t ignoreDepth, pid_t tid) {
 
     mFrameLines.clear();
 
+#ifdef _MSC_VER
+#else
     unwindstack::AndroidLocalUnwinder unwinder;
     unwindstack::AndroidUnwinderData data;
     std::optional<pid_t> tid_val;
@@ -59,6 +63,7 @@ void CallStack::update(int32_t ignoreDepth, pid_t tid) {
         frame.num -= ignoreDepth;
         mFrameLines.push_back(String8(unwinder.FormatFrame(frame).c_str()));
     }
+#endif
 }
 
 void CallStack::log(const char* logtag, android_LogPriority priority, const char* prefix) const {

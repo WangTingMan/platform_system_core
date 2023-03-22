@@ -37,7 +37,15 @@
 # endif // !WEAKS_AVAILABLE
 #endif // CALLSTACK_WEAK predefined
 
+#ifdef _MSC_VER
+#define ALWAYS_INLINE
+#else
 #define ALWAYS_INLINE __attribute__((always_inline))
+#endif
+
+#ifndef pid_t
+#define pid_t int
+#endif
 
 namespace android {
 
@@ -122,14 +130,14 @@ public:
         if (reinterpret_cast<uintptr_t>(logStackInternal) != 0 && stack != nullptr) {
             logStackInternal(logtag, stack, priority);
         } else {
-            ALOG(LOG_WARN, logtag, "CallStack::logStackInternal not linked");
+            ALOG(ANDROID_LOG_WARN, logtag, "CallStack::logStackInternal not linked");
         }
     }
 
 #else
     static void ALWAYS_INLINE logStack(const char* logtag, CallStack* = getCurrent().get(),
                                        android_LogPriority = ANDROID_LOG_DEBUG) {
-        ALOG(LOG_WARN, logtag, "CallStack::logStackInternal not linked");
+        ALOG(ANDROID_LOG_WARN, logtag, "CallStack::logStackInternal not linked");
     }
 #endif // !WEAKS_AVAILABLE
 

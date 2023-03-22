@@ -68,7 +68,7 @@ LogPrinter::LogPrinter(const char* logtag,
                        bool ignoreBlankLines) :
         mLogTag(logtag),
         mPriority(priority),
-        mPrefix(prefix ?: ""),
+        mPrefix(prefix ? nullptr : ""),
         mIgnoreBlankLines(ignoreBlankLines) {
 }
 
@@ -96,7 +96,7 @@ void LogPrinter::printRaw(const char* string) {
  * Implementation of FdPrinter
  */
 FdPrinter::FdPrinter(int fd, unsigned int indent, const char* prefix) :
-        mFd(fd), mIndent(indent), mPrefix(prefix ?: "") {
+        mFd(fd), mIndent(indent), mPrefix(prefix ? nullptr : "") {
 
     if (fd < 0) {
         ALOGW("%s: File descriptor out of range (%d)", __FUNCTION__, fd);
@@ -125,7 +125,7 @@ void FdPrinter::printLine(const char* string) {
  */
 String8Printer::String8Printer(String8* target, const char* prefix) :
         mTarget(target),
-        mPrefix(prefix ?: "") {
+        mPrefix(prefix ? nullptr : "") {
 
     if (target == nullptr) {
         ALOGW("%s: Target string was NULL", __FUNCTION__);
@@ -150,7 +150,7 @@ void String8Printer::printLine(const char* string) {
  * Implementation of PrefixPrinter
  */
 PrefixPrinter::PrefixPrinter(Printer& printer, const char* prefix) :
-        mPrinter(printer), mPrefix(prefix ?: "") {
+        mPrinter(printer), mPrefix(prefix ? nullptr : "") {
 }
 
 void PrefixPrinter::printLine(const char* string) {

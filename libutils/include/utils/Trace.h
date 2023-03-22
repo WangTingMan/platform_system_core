@@ -17,12 +17,6 @@
 #ifndef ANDROID_TRACE_H
 #define ANDROID_TRACE_H
 
-#if defined(_WIN32)
-
-#define ATRACE_NAME(...)
-#define ATRACE_CALL()
-
-#else  // !_WIN32
 
 #include <stdint.h>
 
@@ -56,6 +50,5 @@ private:
 
 }  // namespace android
 
-#endif  // _WIN32
 
 #endif // ANDROID_TRACE_H

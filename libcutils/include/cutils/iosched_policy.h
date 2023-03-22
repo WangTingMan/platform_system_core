@@ -17,6 +17,8 @@
 #ifndef __CUTILS_IOSCHED_POLICY_H
 #define __CUTILS_IOSCHED_POLICY_H
 
+#include <cutils\cutils_export.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,8 +30,8 @@ typedef enum {
     IoSchedClass_IDLE,
 } IoSchedClass;
 
-extern int android_set_ioprio(int pid, IoSchedClass clazz, int ioprio);
-extern int android_get_ioprio(int pid, IoSchedClass *clazz, int *ioprio);
+CUTILS_EXPORT  int android_set_ioprio(int pid, IoSchedClass clazz, int ioprio);
+CUTILS_EXPORT  int android_get_ioprio(int pid, IoSchedClass *clazz, int *ioprio);
 
 #ifdef __cplusplus
 }

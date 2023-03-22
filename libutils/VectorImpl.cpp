@@ -26,6 +26,10 @@
 
 #include "SharedBuffer.h"
 
+#ifdef _MSC_VER
+#include "utils/uitils_overflow_check_ms.h"
+#endif
+
 /*****************************************************************************/
 
 
@@ -279,7 +283,7 @@ ssize_t VectorImpl::replaceAt(const void* prototype, size_t index)
 
 ssize_t VectorImpl::removeItemsAt(size_t index, size_t count)
 {
-    size_t end;
+    size_t end = 0;
     LOG_ALWAYS_FATAL_IF(__builtin_add_overflow(index, count, &end), "overflow: index=%zu count=%zu",
                         index, count);
     if (end > size()) return BAD_VALUE;
@@ -381,7 +385,7 @@ void* VectorImpl::_grow(size_t where, size_t amount)
             "[%p] _grow: where=%d, amount=%d, count=%d",
             this, (int)where, (int)amount, (int)mCount); // caller already checked
 
-    size_t new_size;
+    size_t new_size = 0;
     LOG_ALWAYS_FATAL_IF(__builtin_add_overflow(mCount, amount, &new_size), "new_size overflow");
 
     if (capacity() < new_size) {
@@ -460,7 +464,7 @@ void VectorImpl::_shrink(size_t where, size_t amount)
             "[%p] _shrink: where=%d, amount=%d, count=%d",
             this, (int)where, (int)amount, (int)mCount); // caller already checked
 
-    size_t new_size;
+    size_t new_size = 0;
     LOG_ALWAYS_FATAL_IF(__builtin_sub_overflow(mCount, amount, &new_size));
 
     if (new_size < (capacity() / 2)) {

@@ -26,6 +26,10 @@
 #include <utils/SortedVector.h>
 #include <utils/TypeHelpers.h>
 
+#if !defined(__PRETTY_FUNCTION__)
+#define __PRETTY_FUNCTION__ __FUNCSIG__
+#endif
+
 // ---------------------------------------------------------------------------
 
 namespace android {

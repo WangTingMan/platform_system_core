@@ -21,9 +21,11 @@
 
 #include <utils/Timers.h>
 
+#include <utils/utils_export.h>
+
 namespace android {
 
-class StopWatch {
+class UTILS_EXPORT StopWatch {
   public:
     StopWatch(const char* name, int clock = SYSTEM_TIME_MONOTONIC);
     ~StopWatch();

@@ -17,6 +17,8 @@
 #ifndef __CUTILS_CONFIG_UTILS_H
 #define __CUTILS_CONFIG_UTILS_H
 
+#include <cutils\cutils_export.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,28 +36,28 @@ struct cnode
 };
 
 /* parse a text string into a config node tree */
-void config_load(cnode *root, char *data);
+CUTILS_EXPORT void config_load(cnode *root, char *data);
 
 /* parse a file into a config node tree */
-void config_load_file(cnode *root, const char *fn);
+CUTILS_EXPORT void config_load_file(cnode *root, const char *fn);
 
 /* create a single config node */
-cnode* config_node(const char *name, const char *value);
+CUTILS_EXPORT cnode* config_node(const char *name, const char *value);
 
 /* locate a named child of a config node */
-cnode* config_find(cnode *root, const char *name);
+CUTILS_EXPORT cnode* config_find(cnode *root, const char *name);
 
 /* look up a child by name and return the boolean value */
-int config_bool(cnode *root, const char *name, int _default);
+CUTILS_EXPORT int config_bool(cnode *root, const char *name, int _default);
 
 /* look up a child by name and return the string value */
-const char* config_str(cnode *root, const char *name, const char *_default);
+CUTILS_EXPORT const char* config_str(cnode *root, const char *name, const char *_default);
 
 /* add a named child to a config node (or modify it if it already exists) */
-void config_set(cnode *root, const char *name, const char *value);
+CUTILS_EXPORT void config_set(cnode *root, const char *name, const char *value);
 
 /* free a config node tree */
-void config_free(cnode *root);
+CUTILS_EXPORT void config_free(cnode *root);
 
 #ifdef __cplusplus
 }

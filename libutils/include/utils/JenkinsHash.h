@@ -24,6 +24,8 @@
 
 #include <utils/TypeHelpers.h>
 
+#include <utils/utils_export.h>
+
 namespace android {
 
 /* The Jenkins hash of a sequence of 32 bit words A, B, C is:
@@ -39,12 +41,12 @@ inline uint32_t JenkinsHashMix(uint32_t hash, uint32_t data) {
     return hash;
 }
 
-hash_t JenkinsHashWhiten(uint32_t hash);
+UTILS_EXPORT hash_t JenkinsHashWhiten(uint32_t hash);
 
 /* Helpful utility functions for hashing data in 32 bit chunks */
-uint32_t JenkinsHashMixBytes(uint32_t hash, const uint8_t* bytes, size_t size);
+UTILS_EXPORT uint32_t JenkinsHashMixBytes(uint32_t hash, const uint8_t* bytes, size_t size);
 
-uint32_t JenkinsHashMixShorts(uint32_t hash, const uint16_t* shorts, size_t size);
+UTILS_EXPORT uint32_t JenkinsHashMixShorts(uint32_t hash, const uint16_t* shorts, size_t size);
 
 }
 

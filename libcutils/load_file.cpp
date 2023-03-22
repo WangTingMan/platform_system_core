@@ -15,10 +15,18 @@
 ** limitations under the License.
 */
 
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+
 #include <cutils/misc.h>
 
 #include <stdlib.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <corecrt_io.h>
+#else
 #include <unistd.h>
+#endif
 #include <fcntl.h>
 
 void *load_file(const char *fn, unsigned *_sz)

@@ -19,16 +19,18 @@
 
 #include <memory>
 
-#include <android-base/macros.h>
-
 #include <log/log.h>
 
 #include <utils/RefBase.h>
 
-#include <utils/Mutex.h>
+//#include <utils/Mutex.h>
 
 #ifndef __unused
 #define __unused __attribute__((__unused__))
+#endif
+
+#ifndef FALLTHROUGH_INTENDED
+#define FALLTHROUGH_INTENDED [[fallthrough]]
 #endif
 
 // Compile with refcounting debugging enabled.
@@ -62,6 +64,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
+
 
 namespace android {
 
@@ -166,7 +169,7 @@ static void check_not_on_stack(const void* ptr) {
     static constexpr int MIN_PAGE_SIZE = 0x1000;  // 4K. Safer than including sys/user.h.
     static constexpr uintptr_t MIN_PAGE_MASK = ~static_cast<uintptr_t>(MIN_PAGE_SIZE - 1);
     uintptr_t my_frame_address =
-            reinterpret_cast<uintptr_t>(__builtin_frame_address(0 /* this frame */));
+            reinterpret_cast<uintptr_t>( retrieve_frame_address(0 /* this frame */));
     if (((reinterpret_cast<uintptr_t>(ptr) ^ my_frame_address) & MIN_PAGE_MASK) == 0) {
         sp_report_stack_pointer();
     }
@@ -847,3 +850,5 @@ void RefBase::renameRefId(RefBase* ref,
 }
 
 }; // namespace android
+
+

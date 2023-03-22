@@ -17,6 +17,14 @@
 #ifndef ANDROID_CUTILS_ATOMIC_H
 #define ANDROID_CUTILS_ATOMIC_H
 
+#ifdef _MSC_VER
+
+#ifdef __cplusplus
+#include <atomic>
+#endif
+
+#else
+
 #include <stdint.h>
 #include <sys/types.h>
 #include <stdatomic.h>
@@ -92,35 +100,35 @@ int32_t android_atomic_inc(volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
         /* Int32_t, if it exists, is the same as int_least32_t. */
-    return atomic_fetch_add_explicit(a, 1, memory_order_release);
+    return atomic_fetch_add_explicit(a, 1, std::memory_order_release);
 }
 
 ANDROID_ATOMIC_INLINE
 int32_t android_atomic_dec(volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    return atomic_fetch_sub_explicit(a, 1, memory_order_release);
+    return atomic_fetch_sub_explicit(a, 1, std::memory_order_release);
 }
 
 ANDROID_ATOMIC_INLINE
 int32_t android_atomic_add(int32_t value, volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    return atomic_fetch_add_explicit(a, value, memory_order_release);
+    return atomic_fetch_add_explicit(a, value, std::memory_order_release);
 }
 
 ANDROID_ATOMIC_INLINE
 int32_t android_atomic_and(int32_t value, volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    return atomic_fetch_and_explicit(a, value, memory_order_release);
+    return atomic_fetch_and_explicit(a, value, std::memory_order_release);
 }
 
 ANDROID_ATOMIC_INLINE
 int32_t android_atomic_or(int32_t value, volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    return atomic_fetch_or_explicit(a, value, memory_order_release);
+    return atomic_fetch_or_explicit(a, value, std::memory_order_release);
 }
 
 /*
@@ -141,20 +149,20 @@ ANDROID_ATOMIC_INLINE
 int32_t android_atomic_acquire_load(volatile const int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    return atomic_load_explicit(a, memory_order_acquire);
+    return atomic_load_explicit(a, std::memory_order_acquire);
 }
 
 ANDROID_ATOMIC_INLINE
 int32_t android_atomic_release_load(volatile const int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    atomic_thread_fence(memory_order_seq_cst);
+    atomic_thread_fence( std::memory_order_seq_cst);
     /* Any reasonable clients of this interface would probably prefer   */
     /* something weaker.  But some remaining clients seem to be         */
     /* abusing this API in strange ways, e.g. by using it as a fence.   */
     /* Thus we are conservative until we can get rid of remaining       */
     /* clients (and this function).                                     */
-    return atomic_load_explicit(a, memory_order_relaxed);
+    return atomic_load_explicit(a, std::memory_order_relaxed);
 }
 
 /*
@@ -172,8 +180,8 @@ ANDROID_ATOMIC_INLINE
 void android_atomic_acquire_store(int32_t value, volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    atomic_store_explicit(a, value, memory_order_relaxed);
-    atomic_thread_fence(memory_order_seq_cst);
+    atomic_store_explicit(a, value, std::memory_order_relaxed);
+    atomic_thread_fence( std::memory_order_seq_cst);
     /* Again overly conservative to accomodate weird clients.   */
 }
 
@@ -181,7 +189,7 @@ ANDROID_ATOMIC_INLINE
 void android_atomic_release_store(int32_t value, volatile int32_t* addr)
 {
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
-    atomic_store_explicit(a, value, memory_order_release);
+    atomic_store_explicit(a, value, std::memory_order_release);
 }
 
 /*
@@ -203,8 +211,8 @@ int android_atomic_acquire_cas(int32_t oldvalue, int32_t newvalue,
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
     return !atomic_compare_exchange_strong_explicit(
                                           a, &oldvalue, newvalue,
-                                          memory_order_acquire,
-                                          memory_order_acquire);
+                                          std::memory_order_acquire,
+                                          std::memory_order_acquire);
 }
 
 ANDROID_ATOMIC_INLINE
@@ -214,8 +222,8 @@ int android_atomic_release_cas(int32_t oldvalue, int32_t newvalue,
     volatile atomic_int_least32_t* a = to_atomic_int_least32_t(addr);
     return !atomic_compare_exchange_strong_explicit(
                                           a, &oldvalue, newvalue,
-                                          memory_order_release,
-                                          memory_order_relaxed);
+                                          std::memory_order_release,
+                                          std::memory_order_relaxed);
 }
 
 /*
@@ -224,7 +232,11 @@ int android_atomic_release_cas(int32_t oldvalue, int32_t newvalue,
 ANDROID_ATOMIC_INLINE
 void android_compiler_barrier(void)
 {
+#ifdef _WIN32
+    atomic_signal_fence( std::memory_order_seq_cst );
+#else
     __asm__ __volatile__ ("" : : : "memory");
+#endif
     /* Could probably also be:                          */
     /* atomic_signal_fence(memory_order_seq_cst);       */
 }
@@ -232,7 +244,7 @@ void android_compiler_barrier(void)
 ANDROID_ATOMIC_INLINE
 void android_memory_barrier(void)
 {
-    atomic_thread_fence(memory_order_seq_cst);
+    atomic_thread_fence( std::memory_order_seq_cst);
 }
 
 /*
@@ -242,5 +254,7 @@ void android_memory_barrier(void)
  */
 #define android_atomic_write android_atomic_release_store
 #define android_atomic_cmpxchg android_atomic_release_cas
+
+#endif
 
 #endif // ANDROID_CUTILS_ATOMIC_H

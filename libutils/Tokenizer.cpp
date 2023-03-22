@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "Tokenizer"
+#define LOG_TAG "Tokenizer" 
+#define _CRT_NONSTDC_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 
 #include <utils/Tokenizer.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <utils/Log.h>
+
+#include <fstream> 
+#include <corecrt_io.h>
 
 // Enables debug output for the tokenizer.
 #define DEBUG_TOKENIZER 0

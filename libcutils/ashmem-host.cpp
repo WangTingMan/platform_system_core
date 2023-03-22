@@ -30,16 +30,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
-#include <unistd.h>
-
-#include <utils/Compat.h>
 
 static bool ashmem_validate_stat(int fd, struct stat* buf) {
     int result = fstat(fd, buf);
     if (result == -1) {
         return false;
     }
-
+#ifndef _MSC_VER
     /*
      * Check if this is an "ashmem" region.
      * TODO: This is very hacky, and can easily break.
@@ -49,8 +46,13 @@ static bool ashmem_validate_stat(int fd, struct stat* buf) {
         errno = ENOTTY;
         return false;
     }
+#endif
     return true;
 }
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 int ashmem_valid(int fd) {
     struct stat buf;
@@ -58,6 +60,7 @@ int ashmem_valid(int fd) {
 }
 
 int ashmem_create_region(const char* /*ignored*/, size_t size) {
+#ifndef _MSC_VER
     char pattern[PATH_MAX];
     snprintf(pattern, sizeof(pattern), "/tmp/android-ashmem-%d-XXXXXXXXX", getpid());
     int fd = mkstemp(pattern);
@@ -69,8 +72,10 @@ int ashmem_create_region(const char* /*ignored*/, size_t size) {
       close(fd);
       return -1;
     }
-
     return fd;
+#else
+    return 0;
+#endif
 }
 
 int ashmem_set_prot_region(int /*fd*/, int /*prot*/) {
@@ -94,3 +99,8 @@ int ashmem_get_size_region(int fd)
 
     return buf.st_size;
 }
+
+#ifdef __cplusplus
+}
+#endif
+

@@ -25,11 +25,13 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <utils/utils_export.h>
+
 // ---------------------------------------------------------------------------
 
 namespace android {
 
-class SharedBuffer
+class UTILS_EXPORT SharedBuffer
 {
 public:
 

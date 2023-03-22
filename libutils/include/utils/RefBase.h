@@ -210,6 +210,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <type_traits>  // for common_type.
 
 #include <stdint.h>
@@ -222,6 +223,8 @@
 
 #include <utils/StrongPointer.h>
 #include <utils/TypeHelpers.h>
+
+#include <utils/utils_export.h>
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -278,7 +281,7 @@ public:
 
 // ---------------------------------------------------------------------------
 
-class RefBase
+class UTILS_EXPORT RefBase
 {
 public:
             void            incStrong(const void* id) const;
@@ -290,7 +293,7 @@ public:
             //! DEBUGGING ONLY: Get current strong ref count.
             int32_t         getStrongCount() const;
 
-    class weakref_type
+    class UTILS_EXPORT weakref_type
     {
     public:
         RefBase*            refBase() const;

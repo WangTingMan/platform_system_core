@@ -22,6 +22,8 @@
 
 #include <utils/Endian.h>
 
+#include <utils/utils_export.h>
+
 /* get #of elements in a static array
  * DO NOT USE: please use std::vector/std::array instead
  */
@@ -32,8 +34,8 @@
 namespace android {
 
 typedef void (*sysprop_change_callback)(void);
-void add_sysprop_change_callback(sysprop_change_callback cb, int priority);
-void report_sysprop_change();
+UTILS_EXPORT void add_sysprop_change_callback(sysprop_change_callback cb, int priority);
+UTILS_EXPORT void report_sysprop_change();
 
 }  // namespace android
 

@@ -17,12 +17,14 @@
 #ifndef ANDROID_PRINTER_H
 #define ANDROID_PRINTER_H
 
-#include <android/log.h>
+#include <utils/Log.h>
+
+#include <utils/utils_export.h>
 
 namespace android {
 
 // Interface for printing to an arbitrary data stream
-class Printer {
+class UTILS_EXPORT Printer {
 public:
     // Print a new line specified by 'string'. \n is appended automatically.
     // -- Assumes that the string has no new line in it.
@@ -30,7 +32,7 @@ public:
 
     // Print a new line specified by the format string. \n is appended automatically.
     // -- Assumes that the resulting string has no new line in it.
-    virtual void printFormatLine(const char* format, ...) __attribute__((format (printf, 2, 3)));
+    virtual void printFormatLine(const char* format, ...);
 
 protected:
     Printer();
@@ -38,7 +40,7 @@ protected:
 }; // class Printer
 
 // Print to logcat
-class LogPrinter : public Printer {
+class UTILS_EXPORT LogPrinter : public Printer {
 public:
     // Create a printer using the specified logcat and log priority
     // - Unless ignoreBlankLines is false, print blank lines to logcat
@@ -61,7 +63,7 @@ private:
 }; // class LogPrinter
 
 // Print to a file descriptor
-class FdPrinter : public Printer {
+class UTILS_EXPORT FdPrinter : public Printer {
 public:
     // Create a printer using the specified file descriptor.
     // - Each line will be prefixed with 'indent' number of blank spaces.
@@ -85,7 +87,7 @@ private:
 class String8;
 
 // Print to a String8
-class String8Printer : public Printer {
+class UTILS_EXPORT String8Printer : public Printer {
 public:
     // Create a printer using the specified String8 as the target.
     // - In addition, each line will be prefixed with the 'prefix' string.
@@ -101,7 +103,7 @@ private:
 }; // class String8Printer
 
 // Print to an existing Printer by adding a prefix to each line
-class PrefixPrinter : public Printer {
+class UTILS_EXPORT PrefixPrinter : public Printer {
 public:
     // Create a printer using the specified printer as the target.
     PrefixPrinter(Printer& printer, const char* prefix);

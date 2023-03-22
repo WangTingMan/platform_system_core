@@ -32,13 +32,15 @@
 #include <utils/Timers.h>
 #include <utils/ThreadDefs.h>
 
+#include <utils/utils_export.h>
+
 // ---------------------------------------------------------------------------
 namespace android {
 // ---------------------------------------------------------------------------
 
 // DO NOT USE: please use std::thread
 
-class Thread : virtual public RefBase
+class UTILS_EXPORT Thread : virtual public RefBase
 {
 public:
     // Create a Thread object, but doesn't create or start the associated

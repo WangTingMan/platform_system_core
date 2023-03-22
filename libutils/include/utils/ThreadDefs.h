@@ -19,8 +19,6 @@
 
 #include <stdint.h>
 #include <sys/types.h>
-#include <system/graphics.h>
-#include <system/thread_defs.h>
 
 // ---------------------------------------------------------------------------
 // C API
@@ -51,18 +49,18 @@ typedef android_thread_id_t thread_id_t;
 typedef android_thread_func_t thread_func_t;
 
 enum {
-    PRIORITY_LOWEST         = ANDROID_PRIORITY_LOWEST,
-    PRIORITY_BACKGROUND     = ANDROID_PRIORITY_BACKGROUND,
-    PRIORITY_NORMAL         = ANDROID_PRIORITY_NORMAL,
-    PRIORITY_FOREGROUND     = ANDROID_PRIORITY_FOREGROUND,
-    PRIORITY_DISPLAY        = ANDROID_PRIORITY_DISPLAY,
-    PRIORITY_URGENT_DISPLAY = ANDROID_PRIORITY_URGENT_DISPLAY,
-    PRIORITY_AUDIO          = ANDROID_PRIORITY_AUDIO,
-    PRIORITY_URGENT_AUDIO   = ANDROID_PRIORITY_URGENT_AUDIO,
-    PRIORITY_HIGHEST        = ANDROID_PRIORITY_HIGHEST,
-    PRIORITY_DEFAULT        = ANDROID_PRIORITY_DEFAULT,
-    PRIORITY_MORE_FAVORABLE = ANDROID_PRIORITY_MORE_FAVORABLE,
-    PRIORITY_LESS_FAVORABLE = ANDROID_PRIORITY_LESS_FAVORABLE,
+    PRIORITY_LOWEST         = 0,
+    PRIORITY_BACKGROUND     = 1,
+    PRIORITY_NORMAL         = 2,
+    PRIORITY_FOREGROUND     = 3,
+    PRIORITY_DISPLAY        = 4,
+    PRIORITY_URGENT_DISPLAY = 5,
+    PRIORITY_AUDIO          = 6,
+    PRIORITY_URGENT_AUDIO   = 7,
+    PRIORITY_HIGHEST        = 8,
+    PRIORITY_DEFAULT        = 9,
+    PRIORITY_MORE_FAVORABLE = 10,
+    PRIORITY_LESS_FAVORABLE = 11,
 };
 
 // ---------------------------------------------------------------------------

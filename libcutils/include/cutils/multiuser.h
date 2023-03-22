@@ -18,9 +18,18 @@
 #define __CUTILS_MULTIUSER_H
 
 #include <sys/types.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#ifndef uid_t
+#define uid_t int
+#endif
+
+#ifndef gid_t
+#define gid_t int
 #endif
 
 typedef uid_t userid_t;
