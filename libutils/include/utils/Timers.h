@@ -19,11 +19,25 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
-#include <WinSock2.h>
 
 #include <utils/Compat.h>
-
 #include <utils/utils_export.h>
+
+#ifdef __cplusplus
+#include <functional>
+#endif
+
+#ifndef WINSOCK_API_LINKAGE
+ /*
+  * Structure used in select() call, taken from the BSD file sys/time.h.
+  */
+#ifndef DO_NOT_DEFINE_TIME_VAL
+struct timeval {
+    long    tv_sec;         /* seconds */
+    long    tv_usec;        /* and microseconds */
+};
+#endif
+#endif
 
 // ------------------------------------------------------------------
 // C API
@@ -120,16 +134,31 @@ UTILS_EXPORT int clock_gettime(int type, struct timespec* time);
 typedef void (*timer_expired_callback_type)(void* para);
 typedef void (*timer_expired_callback_no_paras_type)();
 
-UTILS_EXPORT int common_timer_create(timer_expired_callback_type a_callback, void* a_user_data);
+UTILS_EXPORT uint32_t common_timer_create(timer_expired_callback_type a_callback, void* a_user_data);
 
-UTILS_EXPORT int common_timer_create_no_paras(timer_expired_callback_no_paras_type a_callback);
+UTILS_EXPORT uint32_t common_timer_create_no_paras(timer_expired_callback_no_paras_type a_callback);
 
-UTILS_EXPORT void stop_timer(int timer_id);
+UTILS_EXPORT void stop_timer( uint32_t timer_id);
 
-UTILS_EXPORT void delete_timer(int timer_id);
+UTILS_EXPORT void delete_timer( uint32_t timer_id);
 
-UTILS_EXPORT void set_timer_duration(int timer_id, int milliseconds);
+UTILS_EXPORT void set_timer_duration( uint32_t timer_id, int milliseconds);
+
+UTILS_EXPORT void set_timer( uint32_t timer_id, int milliseconds,
+    timer_expired_callback_type a_callback, void* a_user_data );
+
+/**
+ * Return 0 if not scheduled, otherwise return not 0( maybe 1 )
+ */
+UTILS_EXPORT int is_timer_scheduled( uint32_t timer_id );
+
+UTILS_EXPORT int get_timer_remaining_ms( uint32_t timer_id );
 
 #ifdef __cplusplus
 } // extern "C"
+#endif
+
+#ifdef __cplusplus
+UTILS_EXPORT uint32_t create_timer( std::function<void()> a_fun, std::string a_name = "" );
+UTILS_EXPORT void set_timer_option( uint32_t timer_id, int milliseconds, std::function<void()> a_fun );
 #endif
