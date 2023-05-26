@@ -25,6 +25,20 @@ extern "C" {
 #endif
 
 #if defined(__GLIBC__) || defined(_WIN32)
+
+/*
+* Get next token from string *stringp, where tokens are possibly-empty
+* strings separated by characters from delim.
+*
+* Writes NULs into the string at *stringp to end tokens.
+* delim need not remain constant from call to call.
+* On return, *stringp points past the last NUL written (if there might
+* be further tokens), or is NULL (if there are definitely no more tokens).
+*
+* If *stringp is NULL, strsep returns NULL.
+*/
+CUTILS_EXPORT char* strsep( char** stringp, const char* delim );
+
 /* Declaration of strlcpy() for platforms that don't already have it. */
 CUTILS_EXPORT size_t strlcpy(char *dst, const char *src, size_t size);
 

@@ -128,6 +128,10 @@ UTILS_EXPORT int gettimeofday(struct timeval* p, struct timezone* z);
 #define CLOCK_MONOTONIC 1
 #endif
 
+#ifndef CLOCK_REALTIME
+#define CLOCK_REALTIME 2
+#endif
+
 UTILS_EXPORT int clock_gettime(int type, struct timespec* time);
 #endif
 

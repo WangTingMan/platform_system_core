@@ -22,6 +22,40 @@
 #include <string>
 #include <cutils/memory.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+char* strsep( char** stringp, const char* delim )
+{
+    char* s;
+    const char* spanp;
+    int c, sc;
+    char* tok;
+
+    if( ( s = *stringp ) == NULL )
+        return ( NULL );
+    for( tok = s;;)
+    {
+        c = *s++;
+        spanp = delim;
+        do
+        {
+            if( ( sc = *spanp++ ) == c )
+            {
+                if( c == 0 )
+                    s = NULL;
+                else
+                    s[-1] = 0;
+                *stringp = s;
+                return ( tok );
+            }
+        } while( sc != 0 );
+    }
+    /* NOTREACHED */
+    return NULL;
+}
+
 /* Implementation of strlcpy() for platforms that don't already have it. */
 
 /*
@@ -66,5 +100,9 @@ size_t strlcat(char* dest, const char* src, size_t destsz)
 	dest_str.append(src);
 	return strlcpy(dest, dest_str.c_str(), destsz);
 }
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif
