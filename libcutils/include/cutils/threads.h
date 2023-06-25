@@ -26,6 +26,8 @@
 #include <pthread.h>
 #endif
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -73,6 +75,10 @@ CUTILS_EXPORT void* thread_store_get( thread_store_t* store );
 CUTILS_EXPORT void thread_store_set( thread_store_t* store,
     void* value,
     thread_store_destruct_t  destroy );
+
+CUTILS_EXPORT void usleep( uint32_t time_ );
+
+CUTILS_EXPORT void sleep( uint32_t time_ );
 
 #ifdef __cplusplus
 }

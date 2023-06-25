@@ -25,6 +25,8 @@
 #include <windows.h>
 #endif
 
+#include <thread>
+
 #if defined(__BIONIC__) || defined(__GLIBC__) && __GLIBC_MINOR__ >= 32
 // No definition needed for Android because we'll just pick up bionic's copy.
 // No definition needed for Glibc >= 2.32 because it exposes its own copy.
@@ -111,6 +113,17 @@ void   thread_store_set( thread_store_t* store,
 
     TlsSetValue( store->tls, value );
 }
+
+void usleep( uint32_t time_ )
+{
+    std::this_thread::sleep_for( std::chrono::microseconds( time_ ) );
+}
+
+void sleep( uint32_t time_ )
+{
+    std::this_thread::sleep_for( std::chrono::seconds( time_ ) );
+}
+
 #endif /* !defined(_WIN32) */
 
 #endif

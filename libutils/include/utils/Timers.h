@@ -122,6 +122,8 @@ UTILS_EXPORT int toMillisecondTimeoutDelay(nsecs_t referenceTime, nsecs_t timeou
 
 UTILS_EXPORT int gettimeofday(struct timeval* p, struct timezone* z);
 
+UTILS_EXPORT void localtime_r(const time_t *secs, struct tm *time);
+
 #if defined(_MSC_VER)
 
 #ifndef CLOCK_MONOTONIC
@@ -130,6 +132,14 @@ UTILS_EXPORT int gettimeofday(struct timeval* p, struct timezone* z);
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 2
+#endif
+
+#ifndef CLOCK_BOOTTIME
+#define CLOCK_BOOTTIME 7
+#endif
+
+#ifndef clockid_t
+#define clockid_t int
 #endif
 
 UTILS_EXPORT int clock_gettime(int type, struct timespec* time);

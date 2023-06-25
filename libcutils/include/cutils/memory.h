@@ -46,6 +46,13 @@ CUTILS_EXPORT char* strtok_r(char* str, const char* delim, char** saveptr);
 
 CUTILS_EXPORT size_t strlcat(char* dest, const char* src, size_t destsz);
 
+CUTILS_EXPORT void bzero( void*, size_t );
+
+/*
+ * Find the first occurrence of find in s, ignore case.
+ */
+CUTILS_EXPORT char* strcasestr( const char* s, const char* find );
+
 #endif
 
 #ifdef __cplusplus
