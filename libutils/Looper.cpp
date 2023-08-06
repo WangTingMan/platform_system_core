@@ -15,19 +15,24 @@
 
 #include <utils/Looper.h>
 
+#ifndef _MSC_VER
 #include <sys/eventfd.h>
+#endif
 #include <cinttypes>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 namespace android {
 
 namespace {
 
 constexpr uint64_t WAKE_EVENT_FD_SEQ = 1;
-
+#ifndef _MSC_VER
 epoll_event createEpollEvent(uint32_t events, uint64_t seq) {
     return {.events = events, .data = {.u64 = seq}};
 }
-
+#endif
 }  // namespace
 
 // --- WeakMessageHandler ---
@@ -65,10 +70,13 @@ int SimpleLooperCallback::handleEvent(int fd, int events, void* data) {
 
 // Maximum number of file descriptors for which to retrieve poll events each iteration.
 static const int EPOLL_MAX_EVENTS = 16;
-
+#ifndef _MSC_VER
 static pthread_once_t gTLSOnce = PTHREAD_ONCE_INIT;
 static pthread_key_t gTLSKey = 0;
-
+#else
+static std::once_flag gTLSOnce;
+thread_local static std::shared_ptr<Looper> gTLSKey;
+#endif
 Looper::Looper(bool allowNonCallbacks)
     : mAllowNonCallbacks(allowNonCallbacks),
       mSendingMessage(false),
@@ -77,9 +85,10 @@ Looper::Looper(bool allowNonCallbacks)
       mNextRequestSeq(WAKE_EVENT_FD_SEQ + 1),
       mResponseIndex(0),
       mNextMessageUptime(LLONG_MAX) {
+#ifndef _MSC_VER
     mWakeEventFd.reset(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC));
     LOG_ALWAYS_FATAL_IF(mWakeEventFd.get() < 0, "Could not make wake event fd: %s", strerror(errno));
-
+#endif
     AutoMutex _l(mLock);
     rebuildEpollLocked();
 }
@@ -88,8 +97,11 @@ Looper::~Looper() {
 }
 
 void Looper::initTLSKey() {
+#ifndef _MSC_VER
     int error = pthread_key_create(&gTLSKey, threadDestructor);
     LOG_ALWAYS_FATAL_IF(error != 0, "Could not allocate TLS key: %s", strerror(error));
+#else
+#endif
 }
 
 void Looper::threadDestructor(void *st) {
@@ -105,19 +117,26 @@ void Looper::setForThread(const sp<Looper>& looper) {
     if (looper != nullptr) {
         looper->incStrong((void*)threadDestructor);
     }
-
+#ifndef _MSC_VER
     pthread_setspecific(gTLSKey, looper.get());
-
+#else
+    gTLSKey.reset(looper.get(), [](void*) {});
+#endif
     if (old != nullptr) {
         old->decStrong((void*)threadDestructor);
     }
 }
 
 sp<Looper> Looper::getForThread() {
+#ifndef _MSC_VER
     int result = pthread_once(& gTLSOnce, initTLSKey);
     LOG_ALWAYS_FATAL_IF(result != 0, "pthread_once failed");
 
     return (Looper*)pthread_getspecific(gTLSKey);
+#else
+    std::call_once(gTLSOnce, initTLSKey);
+    return gTLSKey.get();
+#endif
 }
 
 sp<Looper> Looper::prepare(int opts) {
@@ -140,6 +159,7 @@ bool Looper::getAllowNonCallbacks() const {
 
 void Looper::rebuildEpollLocked() {
     // Close old epoll instance if we have one.
+#ifndef _MSC_VER
     if (mEpollFd >= 0) {
 #if DEBUG_CALLBACKS
         ALOGD("%p ~ rebuildEpollLocked - rebuilding epoll set", this);
@@ -165,6 +185,7 @@ void Looper::rebuildEpollLocked() {
                   request.fd, strerror(errno));
         }
     }
+#endif
 }
 
 void Looper::scheduleEpollRebuildLocked() {
@@ -239,10 +260,11 @@ int Looper::pollInner(int timeoutMillis) {
 
     // We are about to idle.
     mPolling = true;
-
+    int eventCount = 0;
+#ifndef _MSC_VER
     struct epoll_event eventItems[EPOLL_MAX_EVENTS];
-    int eventCount = epoll_wait(mEpollFd.get(), eventItems, EPOLL_MAX_EVENTS, timeoutMillis);
-
+    eventCount = epoll_wait(mEpollFd.get(), eventItems, EPOLL_MAX_EVENTS, timeoutMillis);
+#endif
     // No longer idling.
     mPolling = false;
 
@@ -265,7 +287,7 @@ int Looper::pollInner(int timeoutMillis) {
         result = POLL_ERROR;
         goto Done;
     }
-
+#ifndef _MSC_VER
     // Check for poll timeout.
     if (eventCount == 0) {
 #if DEBUG_POLL_AND_WAKE
@@ -274,12 +296,12 @@ int Looper::pollInner(int timeoutMillis) {
         result = POLL_TIMEOUT;
         goto Done;
     }
-
+#endif
     // Handle all events.
 #if DEBUG_POLL_AND_WAKE
     ALOGD("%p ~ pollOnce - handling events from %d fds", this, eventCount);
 #endif
-
+#ifndef _MSC_VER
     for (int i = 0; i < eventCount; i++) {
         const SequenceNumber seq = eventItems[i].data.u64;
         uint32_t epollEvents = eventItems[i].events;
@@ -306,6 +328,7 @@ int Looper::pollInner(int timeoutMillis) {
             }
         }
     }
+#endif
 Done: ;
 
     // Invoke pending message callbacks.
@@ -404,7 +427,7 @@ void Looper::wake() {
 #if DEBUG_POLL_AND_WAKE
     ALOGD("%p ~ wake", this);
 #endif
-
+#ifndef _MSC_VER
     uint64_t inc = 1;
     ssize_t nWrite = TEMP_FAILURE_RETRY(write(mWakeEventFd.get(), &inc, sizeof(uint64_t)));
     if (nWrite != sizeof(uint64_t)) {
@@ -413,15 +436,17 @@ void Looper::wake() {
                              mWakeEventFd.get(), nWrite, strerror(errno));
         }
     }
+#endif
 }
 
 void Looper::awoken() {
 #if DEBUG_POLL_AND_WAKE
     ALOGD("%p ~ awoken", this);
 #endif
-
+#ifndef _MSC_VER
     uint64_t counter;
     TEMP_FAILURE_RETRY(read(mWakeEventFd.get(), &counter, sizeof(uint64_t)));
+#endif
 }
 
 int Looper::addFd(int fd, int ident, int events, Looper_callbackFunc callback, void* data) {
@@ -460,7 +485,7 @@ int Looper::addFd(int fd, int ident, int events, const sp<LooperCallback>& callb
         request.events = events;
         request.callback = callback;
         request.data = data;
-
+#ifndef _MSC_VER
         epoll_event eventItem = createEpollEvent(request.getEpollEvents(), seq);
         auto seq_it = mSequenceNumberByFd.find(fd);
         if (seq_it == mSequenceNumberByFd.end()) {
@@ -471,7 +496,8 @@ int Looper::addFd(int fd, int ident, int events, const sp<LooperCallback>& callb
             }
             mRequests.emplace(seq, request);
             mSequenceNumberByFd.emplace(fd, seq);
-        } else {
+        } else
+        {
             int epollResult = epoll_ctl(mEpollFd.get(), EPOLL_CTL_MOD, fd, &eventItem);
             if (epollResult < 0) {
                 if (errno == ENOENT) {
@@ -510,6 +536,7 @@ int Looper::addFd(int fd, int ident, int events, const sp<LooperCallback>& callb
             mRequests.emplace(seq, request);
             seq_it->second = seq;
         }
+#endif
     } // release lock
     return 1;
 }
@@ -539,7 +566,10 @@ int Looper::removeSequenceNumberLocked(SequenceNumber seq) {
     mRequests.erase(request_it);
     mSequenceNumberByFd.erase(fd);
 
-    int epollResult = epoll_ctl(mEpollFd.get(), EPOLL_CTL_DEL, fd, nullptr);
+    int epollResult = 0;
+#ifndef _MSC_VER
+    epoll_ctl(mEpollFd.get(), EPOLL_CTL_DEL, fd, nullptr);
+#endif
     if (epollResult < 0) {
         if (errno == EBADF || errno == ENOENT) {
             // Tolerate EBADF or ENOENT because it means that the file descriptor was closed
@@ -657,8 +687,10 @@ bool Looper::isPolling() const {
 
 uint32_t Looper::Request::getEpollEvents() const {
     uint32_t epollEvents = 0;
+#ifndef _MSC_VER
     if (events & EVENT_INPUT) epollEvents |= EPOLLIN;
     if (events & EVENT_OUTPUT) epollEvents |= EPOLLOUT;
+#endif
     return epollEvents;
 }
 

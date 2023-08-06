@@ -22,9 +22,13 @@
 #include <utils/Vector.h>
 #include <utils/threads.h>
 
+#ifndef _MSC_VER
 #include <sys/epoll.h>
 
 #include <android-base/unique_fd.h>
+#else
+#include <utils/utils_export.h>
+#endif
 
 #include <unordered_map>
 #include <utility>
@@ -69,7 +73,7 @@ struct Message {
  * to remove any pending messages destined for the handler so that the handler
  * can be destroyed.
  */
-class MessageHandler : public virtual RefBase {
+class UTILS_EXPORT MessageHandler : public virtual RefBase {
 protected:
     virtual ~MessageHandler();
 
@@ -84,7 +88,7 @@ public:
 /**
  * A simple proxy that holds a weak reference to a message handler.
  */
-class WeakMessageHandler : public MessageHandler {
+class UTILS_EXPORT WeakMessageHandler : public MessageHandler {
 protected:
     virtual ~WeakMessageHandler();
 
@@ -100,7 +104,7 @@ private:
 /**
  * A looper callback.
  */
-class LooperCallback : public virtual RefBase {
+class UTILS_EXPORT LooperCallback : public virtual RefBase {
 protected:
     virtual ~LooperCallback();
 
@@ -120,7 +124,7 @@ public:
 /**
  * Wraps a Looper_callbackFunc function pointer.
  */
-class SimpleLooperCallback : public LooperCallback {
+class UTILS_EXPORT SimpleLooperCallback : public LooperCallback {
 protected:
     virtual ~SimpleLooperCallback();
 
@@ -138,7 +142,7 @@ private:
  *
  * A looper can be associated with a thread although there is no requirement that it must be.
  */
-class Looper : public RefBase {
+class UTILS_EXPORT Looper : public RefBase {
 protected:
     virtual ~Looper();
 
@@ -453,7 +457,9 @@ private:
 
     const bool mAllowNonCallbacks; // immutable
 
+#ifndef _MSC_VER
     android::base::unique_fd mWakeEventFd;  // immutable
+#endif
     Mutex mLock;
 
     Vector<MessageEnvelope> mMessageEnvelopes; // guarded by mLock
@@ -463,7 +469,9 @@ private:
     // any use of it is racy anyway.
     volatile bool mPolling;
 
+#ifndef _MSC_VER
     android::base::unique_fd mEpollFd;  // guarded by mLock but only modified on the looper thread
+#endif
     bool mEpollRebuildRequired; // guarded by mLock
 
     // Locked maps of fds and sequence numbers monitoring requests.

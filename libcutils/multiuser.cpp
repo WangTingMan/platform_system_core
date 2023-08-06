@@ -22,7 +22,12 @@ userid_t multiuser_get_user_id(uid_t uid) {
 }
 
 appid_t multiuser_get_app_id(uid_t uid) {
-    return uid % AID_USER_OFFSET;
+    appid_t ret = uid % AID_USER_OFFSET;
+    if (ret > 10000)
+    {
+        ret = 9999;
+    }
+    return ret;
 }
 
 uid_t multiuser_get_uid(userid_t user_id, appid_t app_id) {
