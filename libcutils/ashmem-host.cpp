@@ -16,6 +16,8 @@
 
 #include <cutils/ashmem.h>
 
+#define NOMINMAX
+
 /*
  * Implementation of the user-space ashmem API for the simulator, which lacks
  * an ashmem-enabled kernel. See ashmem-dev.c for the real ashmem-based version.
@@ -30,6 +32,18 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <windows.h>
+
+#include <atomic>
+#include <memory>
+#include <vector>
+
+#include <base/memory/shared_memory.h>
+#include <base/logging.h>
+#include <base/strings/sys_string_conversions.h>
+#include <base/rand_util.h>
+#include <base/strings/utf_string_conversions.h>
+#include <base/strings/stringprintf.h>
 
 static bool ashmem_validate_stat(int fd, struct stat* buf) {
     int result = fstat(fd, buf);
@@ -54,12 +68,16 @@ static bool ashmem_validate_stat(int fd, struct stat* buf) {
 extern "C" {
 #endif
 
-int ashmem_valid(int fd) {
+int ashmem_valid( ASHMEM_HANDLE fd) {
+#ifdef _MSC_VER
+    return INVALID_HANDLE_VALUE == fd;
+#else
     struct stat buf;
     return ashmem_validate_stat(fd, &buf);
+#endif
 }
 
-int ashmem_create_region(const char* /*ignored*/, size_t size) {
+ASHMEM_HANDLE ashmem_create_region(const char* a_name, size_t size) {
 #ifndef _MSC_VER
     char pattern[PATH_MAX];
     snprintf(pattern, sizeof(pattern), "/tmp/android-ashmem-%d-XXXXXXXXX", getpid());
@@ -74,30 +92,77 @@ int ashmem_create_region(const char* /*ignored*/, size_t size) {
     }
     return fd;
 #else
-    return 0;
+    HANDLE sh_hdl = INVALID_HANDLE_VALUE;
+    // Check maximum accounting for overflow.
+    constexpr size_t kSectionMask = 65536 - 1;
+    if( size >
+        static_cast<size_t>( std::numeric_limits<int>::max() ) - kSectionMask )
+    {
+        LOG( ERROR ) << "Size to large!";
+        return sh_hdl;
+    }
+
+    std::wstring name =  base::SysNativeMBToWide( std::string{ a_name } );
+    sh_hdl = CreateFileMapping( INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0,
+                                  static_cast<DWORD>( size ), name.c_str() );
+    if( !sh_hdl )
+    {
+        LOG( ERROR ) << "CREATE_FILE_MAPPING_FAILURE, code = " << GetLastError();
+        return sh_hdl;
+    }
+    HANDLE h2;
+    BOOL success = ::DuplicateHandle(
+        GetCurrentProcess(), sh_hdl, GetCurrentProcess(), &h2,
+        FILE_MAP_READ | FILE_MAP_WRITE | SECTION_QUERY, FALSE, 0 );
+    BOOL rv = ::CloseHandle( sh_hdl );
+    if( !success )
+    {
+        LOG( ERROR ) << "REDUCE_PERMISSIONS_FAILURE, code = " << GetLastError();
+        return INVALID_HANDLE_VALUE;
+    }
+
+    sh_hdl = h2;
+
+    // If the shared memory already exists, something has gone wrong.
+    if( GetLastError() == ERROR_ALREADY_EXISTS )
+    {
+        rv = ::CloseHandle( sh_hdl );
+        sh_hdl = INVALID_HANDLE_VALUE;
+        LOG( ERROR ) << "ALREADY_EXISTS";
+        return sh_hdl;
+    }
+
+    return sh_hdl;
 #endif
 }
 
-int ashmem_set_prot_region(int /*fd*/, int /*prot*/) {
+/**
+ * The permission already added in ashmem_create_region. So just ignore.
+ */
+int ashmem_set_prot_region( ASHMEM_HANDLE /*fd*/, int /*prot*/) {
     return 0;
 }
 
-int ashmem_pin_region(int /*fd*/, size_t /*offset*/, size_t /*len*/) {
+int ashmem_pin_region( ASHMEM_HANDLE /*fd*/, size_t /*offset*/, size_t /*len*/) {
     return 0 /*ASHMEM_NOT_PURGED*/;
 }
 
-int ashmem_unpin_region(int /*fd*/, size_t /*offset*/, size_t /*len*/) {
+int ashmem_unpin_region( ASHMEM_HANDLE /*fd*/, size_t /*offset*/, size_t /*len*/) {
     return 0 /*ASHMEM_IS_UNPINNED*/;
 }
 
-int ashmem_get_size_region(int fd)
+int ashmem_get_size_region( ASHMEM_HANDLE fd)
 {
+#ifdef _MSC_VER
+    return 0;
+#else
     struct stat buf;
     if (!ashmem_validate_stat(fd, &buf)) {
         return -1;
     }
 
     return buf.st_size;
+#endif
 }
 
 #ifdef __cplusplus

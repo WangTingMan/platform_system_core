@@ -24,16 +24,22 @@
 
 #include "cutils/cutils_export.h"
 
+#ifdef _MSC_VER
+#define ASHMEM_HANDLE void*
+#else
+#define ASHMEM_HANDLE int
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-CUTILS_EXPORT int ashmem_valid(int fd);
-CUTILS_EXPORT int ashmem_create_region(const char *name, size_t size);
-CUTILS_EXPORT int ashmem_set_prot_region(int fd, int prot);
-CUTILS_EXPORT int ashmem_pin_region(int fd, size_t offset, size_t len);
-CUTILS_EXPORT int ashmem_unpin_region(int fd, size_t offset, size_t len);
-CUTILS_EXPORT int ashmem_get_size_region(int fd);
+CUTILS_EXPORT int ashmem_valid( ASHMEM_HANDLE fd);
+CUTILS_EXPORT ASHMEM_HANDLE ashmem_create_region(const char *name, size_t size);
+CUTILS_EXPORT int ashmem_set_prot_region( ASHMEM_HANDLE fd, int prot);
+CUTILS_EXPORT int ashmem_pin_region( ASHMEM_HANDLE fd, size_t offset, size_t len);
+CUTILS_EXPORT int ashmem_unpin_region( ASHMEM_HANDLE fd, size_t offset, size_t len);
+CUTILS_EXPORT int ashmem_get_size_region( ASHMEM_HANDLE fd);
 
 #ifdef __cplusplus
 }

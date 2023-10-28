@@ -24,6 +24,16 @@
 #include <base/callback.h>
 #include <utils/StrongPointer.h>
 
+#include <binderwrapper/libbinderwrapper_export.h>
+
+#ifndef uid_t
+#define uid_t int32_t
+#endif
+
+#ifndef pid_t
+#define pid_t int
+#endif
+
 namespace android {
 
 class BBinder;
@@ -31,7 +41,7 @@ class IBinder;
 
 // Wraps libbinder to make it testable.
 // NOTE: Static methods of this class are not thread-safe.
-class BinderWrapper {
+class LIBBINDERWRAPPER_API BinderWrapper {
  public:
   virtual ~BinderWrapper() {}
 

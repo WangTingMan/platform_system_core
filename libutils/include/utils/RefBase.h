@@ -211,6 +211,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <type_traits>  // for common_type.
 
 #include <stdint.h>
@@ -339,6 +340,16 @@ public:
         getWeakRefs()->trackMe(enable, retain); 
     }
 
+    void setName( std::string const& a_name )
+    {
+        mObjectName = a_name;
+    }
+
+    std::string const& getName()const
+    {
+        return mObjectName;
+    }
+
 protected:
     // When constructing these objects, prefer using sp::make<>. Using a RefBase
     // object on the stack or with other refcount mechanisms (e.g.
@@ -396,6 +407,7 @@ private:
             const void* old_id, const void* new_id);
 
         weakref_impl* const mRefs;
+        std::string mObjectName;
 };
 
 // ---------------------------------------------------------------------------

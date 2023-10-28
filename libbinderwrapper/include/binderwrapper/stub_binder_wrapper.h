@@ -67,7 +67,7 @@ namespace android {
 // CreateLocalBinder(). Then, a test can get the BBinder's address via
 // local_binders() to check that they're passed as expected in binder calls.
 //
-class StubBinderWrapper : public BinderWrapper {
+class LIBBINDERWRAPPER_API StubBinderWrapper : public BinderWrapper {
  public:
   StubBinderWrapper();
   ~StubBinderWrapper() override;

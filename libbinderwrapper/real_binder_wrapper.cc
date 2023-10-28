@@ -50,6 +50,12 @@ RealBinderWrapper::RealBinderWrapper() = default;
 RealBinderWrapper::~RealBinderWrapper() = default;
 
 sp<IBinder> RealBinderWrapper::GetService(const std::string& service_name) {
+  auto it = checked_services_.find( service_name );
+  if( it != checked_services_.end() )
+  {
+      return it->second;
+  }
+
   sp<IServiceManager> service_manager = defaultServiceManager();
   if (!service_manager.get()) {
     LOG(ERROR) << "Unable to get service manager";
@@ -57,8 +63,15 @@ sp<IBinder> RealBinderWrapper::GetService(const std::string& service_name) {
   }
   sp<IBinder> binder =
       service_manager->checkService(String16(service_name.c_str()));
-  if (!binder.get())
-    LOG(ERROR) << "Unable to get \"" << service_name << "\" service";
+  if( !binder.get() )
+  {
+      LOG( ERROR ) << "Unable to get \"" << service_name << "\" service";
+  }
+  else
+  {
+      checked_services_[service_name] = binder;
+  }
+
   return binder;
 }
 

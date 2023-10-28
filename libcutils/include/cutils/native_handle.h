@@ -40,7 +40,12 @@ typedef struct native_handle
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wzero-length-array"
 #endif
+#ifdef _MSC_VER
+#define NATIVE_HANDLE_DATA_SIZE 6
+    void* data[NATIVE_HANDLE_DATA_SIZE];
+#else
     int data[0];        /* numFds + numInts ints */
+#endif
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif

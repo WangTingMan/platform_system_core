@@ -39,6 +39,12 @@ native_handle_t* native_handle_init(char* storage, int numFds, int numInts) {
     handle->version = sizeof(native_handle_t);
     handle->numFds = numFds;
     handle->numInts = numInts;
+#ifdef _MSC_VER
+    for( int i = 0; i < NATIVE_HANDLE_DATA_SIZE; ++i )
+    {
+        handle->data[i] = INVALID_HANDLE_VALUE;
+    }
+#endif
     return handle;
 }
 
@@ -55,6 +61,12 @@ native_handle_t* native_handle_create(int numFds, int numInts) {
         h->version = sizeof(native_handle_t);
         h->numFds = numFds;
         h->numInts = numInts;
+#ifdef _MSC_VER
+        for( int i = 0; i < NATIVE_HANDLE_DATA_SIZE; ++i )
+        {
+            h->data[i] = INVALID_HANDLE_VALUE;
+        }
+#endif
     }
     return h;
 }
@@ -62,7 +74,7 @@ native_handle_t* native_handle_create(int numFds, int numInts) {
 native_handle_t* native_handle_clone(const native_handle_t* handle) {
     native_handle_t* clone = native_handle_create(handle->numFds, handle->numInts);
     if (clone == NULL) return NULL;
-
+#ifndef _MSC_VER
     for (int i = 0; i < handle->numFds; i++) {
         clone->data[i] = dup(handle->data[i]);
         if (clone->data[i] == -1) {
@@ -72,7 +84,7 @@ native_handle_t* native_handle_clone(const native_handle_t* handle) {
             return NULL;
         }
     }
-
+#endif
     memcpy(&clone->data[handle->numFds], &handle->data[handle->numFds],
            sizeof(int) * handle->numInts);
 
@@ -95,7 +107,11 @@ int native_handle_close(const native_handle_t* h) {
     int saved_errno = errno;
     const int numFds = h->numFds;
     for (int i = 0; i < numFds; ++i) {
+#ifdef _MSC_VER
+        CloseHandle( h->data[i] );
+#else
         close(h->data[i]);
+#endif
     }
     errno = saved_errno;
     return 0;

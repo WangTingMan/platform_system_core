@@ -49,6 +49,7 @@ class RealBinderWrapper : public BinderWrapper {
   // Map from binder handle to object that should be notified of the binder's
   // death.
   std::map<sp<IBinder>, sp<DeathRecipient>> death_recipients_;
+  std::map<std::string, sp<IBinder>> checked_services_;
 
   DISALLOW_COPY_AND_ASSIGN(RealBinderWrapper);
 };
