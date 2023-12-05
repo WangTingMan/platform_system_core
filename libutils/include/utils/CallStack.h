@@ -130,14 +130,14 @@ public:
         if (reinterpret_cast<uintptr_t>(logStackInternal) != 0 && stack != nullptr) {
             logStackInternal(logtag, stack, priority);
         } else {
-            ALOG(ANDROID_LOG_WARN, logtag, "CallStack::logStackInternal not linked");
+            ALOG(LOG_WARN, logtag, "CallStack::logStackInternal not linked");
         }
     }
 
 #else
     static void ALWAYS_INLINE logStack(const char* logtag, CallStack* = getCurrent().get(),
                                        android_LogPriority = ANDROID_LOG_DEBUG) {
-        ALOG(ANDROID_LOG_WARN, logtag, "CallStack::logStackInternal not linked");
+        ALOG(LOG_WARN, logtag, "CallStack::logStackInternal not linked");
     }
 #endif // !WEAKS_AVAILABLE
 

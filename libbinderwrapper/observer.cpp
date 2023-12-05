@@ -45,7 +45,7 @@ android::status_t BnObserver::onTransact( uint32_t code, const android::Parcel& 
             ret_status = data.readByteVector( &addr );
             A2dpActiveDeviceChanged( addr );
         }
-    break;
+        break;
     default:
         return BBinder::onTransact( code, data, reply, flags );
     }

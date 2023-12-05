@@ -238,7 +238,7 @@ static bool doCreateThread(android_thread_func_t fn, void* arg, android_thread_i
     if (hThread == NULL)
 #endif
     {
-        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: thread create failed\n");
+        ALOG(LOG_WARN, "thread", "WARNING: thread create failed\n");
         return false;
     }
 
@@ -387,7 +387,7 @@ status_t Mutex::lock()
 void Mutex::unlock()
 {
     if (!ReleaseMutex((HANDLE) mState))
-        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: bad result from unlocking mutex\n");
+        ALOG(LOG_WARN, "thread", "WARNING: bad result from unlocking mutex\n");
 }
 
 status_t Mutex::tryLock()
@@ -396,7 +396,7 @@ status_t Mutex::tryLock()
 
     dwWaitResult = WaitForSingleObject((HANDLE) mState, 0);
     if (dwWaitResult != WAIT_OBJECT_0 && dwWaitResult != WAIT_TIMEOUT)
-        ALOG(ANDROID_LOG_WARN, "thread", "WARNING: bad result from try-locking mutex\n");
+        ALOG(LOG_WARN, "thread", "WARNING: bad result from try-locking mutex\n");
     return (dwWaitResult == WAIT_OBJECT_0) ? 0 : -1;
 }
 

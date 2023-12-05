@@ -61,11 +61,13 @@ public:
     }
 };
 
-// class BluetoothService : public BnBluetoothService
-// {
-// 
-// public:
-// 
-//     void        RegisterObserver( android::sp<IObserver> a_observer );
-// };
+/*
+class BluetoothService : public BnBluetoothService
+{
+
+public:
+
+    void        RegisterObserver( android::sp<IObserver> a_observer );
+};
+*/
 
