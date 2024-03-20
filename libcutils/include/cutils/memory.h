@@ -53,6 +53,17 @@ CUTILS_EXPORT void bzero( void*, size_t );
  */
 CUTILS_EXPORT char* strcasestr( const char* s, const char* find );
 
+CUTILS_EXPORT int __dump_to_file_descriptor
+    (
+    int fd,
+    const char* fmt,
+    ...
+    );
+
+#ifndef dprintf
+#define dprintf __dump_to_file_descriptor
+#endif
+
 #endif
 
 #ifdef __cplusplus

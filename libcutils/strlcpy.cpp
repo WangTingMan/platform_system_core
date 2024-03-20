@@ -21,6 +21,8 @@
 #include <string.h>
 #include <string>
 #include <cutils/memory.h>
+#include <cstdlib>
+#include <cstdarg>
 
 #ifdef __cplusplus
 extern "C" {
@@ -126,6 +128,26 @@ char* strcasestr( const char* s, const char* find )
         s--;
     }
     return ( (char*)s );
+}
+
+int __dump_to_file_descriptor
+    (
+    int fd,
+    const char* fmt,
+    ...
+    )
+{
+#define BUFFER_SIZE 2048
+
+    char buf[BUFFER_SIZE] = { 0x00 };
+    if( fmt )
+    {
+        va_list vaList;
+        va_start( vaList, fmt );
+        vsnprintf( buf, BUFFER_SIZE - 1, fmt, vaList );
+        va_end( vaList );
+    }
+    return 0;
 }
 
 #ifdef __cplusplus

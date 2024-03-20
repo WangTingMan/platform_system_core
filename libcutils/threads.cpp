@@ -114,14 +114,23 @@ void   thread_store_set( thread_store_t* store,
     TlsSetValue( store->tls, value );
 }
 
-void usleep( uint32_t time_ )
+extern "C" void usleep( uint32_t time_ )
 {
     std::this_thread::sleep_for( std::chrono::microseconds( time_ ) );
 }
 
-void sleep( uint32_t time_ )
+extern "C" void sleep( uint32_t time_ )
 {
     std::this_thread::sleep_for( std::chrono::seconds( time_ ) );
+}
+
+extern "C" int nanosleep( const struct timespec* req, struct timespec* rem )
+{
+    auto start_ = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::nanoseconds( req->tv_nsec ) + std::chrono::seconds( req->tv_sec );
+    std::this_thread::sleep_for( duration );
+    auto end_ = std::chrono::high_resolution_clock::now();
+    return 0;
 }
 
 #endif /* !defined(_WIN32) */

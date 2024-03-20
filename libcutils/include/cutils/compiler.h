@@ -44,6 +44,10 @@
  * class ANDROID_API Singleton { }
  */
 
+#ifdef _MSC_VER
+#define ANDROID_API
+#else
 #define ANDROID_API __attribute__((visibility("default")))
+#endif
 
 #endif // ANDROID_CUTILS_COMPILER_H

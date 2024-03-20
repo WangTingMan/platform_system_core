@@ -80,6 +80,8 @@ CUTILS_EXPORT void usleep( uint32_t time_ );
 
 CUTILS_EXPORT void sleep( uint32_t time_ );
 
+CUTILS_EXPORT int nanosleep( const struct timespec* req, struct timespec* rem );
+
 #ifdef __cplusplus
 }
 #endif
