@@ -133,6 +133,8 @@ int property_get(const char* key, char* value, const char* default_value) {
 #define _REALLY_INCLUDE_SYS__SYSTEM_PROPERTIES_H_
 #include <sys/_system_properties.h>
 
+#endif
+
 struct callback_data {
     void (*callback)(const char* name, const char* value, void* cookie);
     void* cookie;
@@ -143,6 +145,17 @@ static void trampoline(void* raw_data, const char* name, const char* value, unsi
     data->callback(name, value, data->cookie);
 }
 
+#ifdef _MSC_VER
+
+int property_list( void ( *fn )( const char* name, const char* value, void* cookie ), void* cookie )
+{
+    property_internal::foreach_fun fun = std::bind( fn, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3 );
+    property_internal::foreach_properties( fun, cookie );
+    return 0;
+}
+
+#else
+
 static void property_list_callback(const prop_info* pi, void* data) {
     __system_property_read_callback(pi, trampoline, data);
 }
@@ -151,7 +164,6 @@ int property_list(void (*fn)(const char* name, const char* value, void* cookie),
     callback_data data = {fn, cookie};
     return __system_property_foreach(property_list_callback, &data);
 }
-
 #endif
 
 #ifdef __cplusplus
