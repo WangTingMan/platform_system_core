@@ -27,6 +27,10 @@
 #include <functional>
 #endif
 
+#ifdef _WINSOCKAPI_
+#define DO_NOT_DEFINE_TIME_VAL
+#endif
+
 #ifndef WINSOCK_API_LINKAGE
  /*
   * Structure used in select() call, taken from the BSD file sys/time.h.
@@ -132,6 +136,10 @@ UTILS_EXPORT void localtime_r(const time_t *secs, struct tm *time);
 
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 2
+#endif
+
+#ifndef CLOCK_MONOTONIC_RAW
+#define CLOCK_MONOTONIC_RAW 4 
 #endif
 
 #ifndef CLOCK_BOOTTIME

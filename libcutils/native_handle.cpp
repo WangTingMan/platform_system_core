@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #define _CRT_NONSTDC_NO_WARNINGS
-#define _CRT_SECURE_NO_WARNINGS
 
 #include <cutils/native_handle.h>
 
@@ -27,6 +26,13 @@
 #include <corecrt_io.h>
 #else
 #include <unistd.h>
+#endif
+
+#include <shared_mutex>
+#include <vector>
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 native_handle_t* native_handle_init(char* storage, int numFds, int numInts) {
@@ -116,3 +122,125 @@ int native_handle_close(const native_handle_t* h) {
     errno = saved_errno;
     return 0;
 }
+
+/**
+ * Safe function used to open dynamic libs. This attempts to improve program security
+ * by removing the current directory from the dll search path. Only dll's found in the
+ * executable or system directory are allowed to be loaded.
+ * @param name  The dynamic lib name.
+ * @return A handle to the opened lib.
+ * 
+ * This function is part of FFmpeg.
+ */
+static inline HMODULE win32_dlopen( const char* name )
+{
+#if _WIN32_WINNT < 0x0602
+    // Need to check if KB2533623 is available
+    if( !GetProcAddress( GetModuleHandleW( L"kernel32.dll" ), "SetDefaultDllDirectories" ) )
+    {
+        HMODULE module = NULL;
+        wchar_t* path = NULL, * name_w = NULL;
+        DWORD pathlen;
+        if( utf8towchar( name, &name_w ) )
+            goto exit;
+        path = (wchar_t*)av_mallocz_array( MAX_PATH, sizeof( wchar_t ) );
+        // Try local directory first
+        pathlen = GetModuleFileNameW( NULL, path, MAX_PATH );
+        pathlen = wcsrchr( path, '\\' ) - path;
+        if( pathlen == 0 || pathlen + wcslen( name_w ) + 2 > MAX_PATH )
+            goto exit;
+        path[pathlen] = '\\';
+        wcscpy( path + pathlen + 1, name_w );
+        module = LoadLibraryExW( path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH );
+        if( module == NULL )
+        {
+            // Next try System32 directory
+            pathlen = GetSystemDirectoryW( path, MAX_PATH );
+            if( pathlen == 0 || pathlen + wcslen( name_w ) + 2 > MAX_PATH )
+                goto exit;
+            path[pathlen] = '\\';
+            wcscpy( path + pathlen + 1, name_w );
+            module = LoadLibraryExW( path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH );
+        }
+    exit:
+        av_free( path );
+        av_free( name_w );
+        return module;
+    }
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_APPLICATION_DIR
+#   define LOAD_LIBRARY_SEARCH_APPLICATION_DIR 0x00000200
+#endif
+#ifndef LOAD_LIBRARY_SEARCH_SYSTEM32
+#   define LOAD_LIBRARY_SEARCH_SYSTEM32        0x00000800
+#endif
+#if HAVE_WINRT
+    wchar_t* name_w = NULL;
+    int ret;
+    if( utf8towchar( name, &name_w ) )
+        return NULL;
+    ret = LoadPackagedLibrary( name_w, 0 );
+    av_free( name_w );
+    return ret;
+#else
+    return LoadLibraryExA( name, NULL, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 );
+#endif
+}
+
+void* dlopen( const char* filename, int flag )
+{
+    return win32_dlopen( filename );
+}
+
+static std::shared_mutex symbol_finders_mutex;
+static std::vector<local_symbol_finder> s_symbol_finders;
+
+void register_local_symbol_finder( local_symbol_finder a_finder )
+{
+    std::lock_guard<std::shared_mutex> locker( symbol_finders_mutex );
+    s_symbol_finders.emplace_back( a_finder );
+}
+
+int free_library( void* p_lib )
+{
+    FreeLibrary( (HMODULE)( p_lib ) );
+    return 0;
+}
+
+void* symbol_looper( void* p_lib, const char* p_name )
+{
+    if( p_lib )
+    {
+        return GetProcAddress( (HMODULE)( p_lib ), p_name );
+    }
+
+    HMODULE mod = GetModuleHandle( nullptr );
+    FARPROC proc = GetProcAddress( mod, p_name );
+    if( proc )
+    {
+        return proc;
+    }
+
+    std::vector<local_symbol_finder> symbol_finders;
+    std::shared_lock<std::shared_mutex> lcker( symbol_finders_mutex );
+    symbol_finders = s_symbol_finders;
+    lcker.unlock();
+
+    for( auto& ele : symbol_finders )
+    {
+        if( ele )
+        {
+            void* p = ele( p_name );
+            if( p )
+            {
+                return p;
+            }
+        }
+    }
+
+    return nullptr;
+}
+
+#ifdef __cplusplus
+}
+#endif

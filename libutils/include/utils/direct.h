@@ -73,7 +73,7 @@ UTILS_EXPORT int scandir(
     struct dirent*** namelist,
     int ( *filter )( const struct dirent* ),
     int ( *compare )( const struct dirent**, const struct dirent** ) );
-
+UTILS_EXPORT int lstat( const char*, struct stat*);
 #ifdef __cplusplus
 } // extern "C"
 #endif

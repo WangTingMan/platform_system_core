@@ -1053,6 +1053,11 @@ extern "C" {
         return result;
     }
 
+    int lstat( const char* path, struct stat* st)
+    {
+        return stat( path, st );
+    }
+
     /* Alphabetical sorting */
     static int
         alphasort(

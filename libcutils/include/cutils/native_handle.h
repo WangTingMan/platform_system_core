@@ -17,7 +17,7 @@
 #ifndef NATIVE_HANDLE_H_
 #define NATIVE_HANDLE_H_
 
-#include <cutils\cutils_export.h>
+#include <cutils/cutils_export.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -103,6 +103,19 @@ CUTILS_EXPORT native_handle_t* native_handle_clone(const native_handle_t* handle
  */
 CUTILS_EXPORT int native_handle_delete(native_handle_t* h);
 
+#define RTLD_NOW 0x00002 /* flag used by dlopen*/
+CUTILS_EXPORT void* dlopen( const char* filename, int flag );
+
+#define RTLD_DEFAULT 0x00
+
+typedef void* ( *local_symbol_finder )( const char* p_name );
+CUTILS_EXPORT void* symbol_looper( void* p_lib, const char* p_name );
+CUTILS_EXPORT void register_local_symbol_finder( local_symbol_finder a_finder );
+CUTILS_EXPORT int free_library( void* p_lib );
+
+#define dlclose(p_lib) free_library((p_lib))
+#define dlsym(p_lib, p_name) symbol_looper(p_lib, p_name)
+#define dlerror() "error in dynamic linking" 
 
 #ifdef __cplusplus
 }

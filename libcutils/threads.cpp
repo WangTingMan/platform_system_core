@@ -13,6 +13,7 @@
 ** See the License for the specific language governing permissions and
 ** limitations under the License.
 */
+#define NOMINMAX
 
 #include <cutils/threads.h>
 
@@ -25,7 +26,15 @@
 #include <windows.h>
 #endif
 
+#include <atomic>
+#include <functional>
 #include <thread>
+#include <mutex>
+#include <vector>
+
+#include <base/threading/platform_thread.h>
+
+#define COLD
 
 #if defined(__BIONIC__) || defined(__GLIBC__) && __GLIBC_MINOR__ >= 32
 // No definition needed for Android because we'll just pick up bionic's copy.
@@ -131,6 +140,242 @@ extern "C" int nanosleep( const struct timespec* req, struct timespec* rem )
     std::this_thread::sleep_for( duration );
     auto end_ = std::chrono::high_resolution_clock::now();
     return 0;
+}
+
+extern "C" {
+
+struct pthread_cb
+{
+    int id;
+    std::shared_ptr<std::thread> thread;
+};
+
+class pthread_manager
+{
+
+public:
+
+    static pthread_manager& get_instance();
+
+    pthread_cb* find_thread( int id );
+
+    int add_thread( pthread_cb cb );
+
+    void remove_thread( int id );
+
+    int get_next_id();
+
+private:
+
+    std::atomic_int32_t m_current_id = 10;
+    std::mutex m_mutex;
+    std::vector<pthread_cb> m_threads;
+};
+
+pthread_manager& pthread_manager::get_instance()
+{
+    static pthread_manager instance;
+    return instance;
+}
+
+pthread_cb* pthread_manager::find_thread( int id )
+{
+    std::lock_guard<std::mutex> lcker( m_mutex );
+    for( int i = 0; i < m_threads.size(); ++i )
+    {
+        if( id == m_threads[i].id )
+        {
+            return &m_threads[i];
+        }
+    }
+    return nullptr;
+}
+
+int pthread_manager::add_thread( pthread_cb cb )
+{
+    std::lock_guard<std::mutex> lcker( m_mutex );
+    m_threads.emplace_back( cb );
+    return cb.id;
+}
+
+void pthread_manager::remove_thread( int id )
+{
+    std::lock_guard<std::mutex> lcker( m_mutex );
+    for( auto it = m_threads.begin(); it != m_threads.end(); ++it )
+    {
+        if( it->id == id )
+        {
+            m_threads.erase( it );
+            return;
+        }
+    }
+}
+
+int pthread_manager::get_next_id()
+{
+    return m_current_id++;
+}
+
+COLD void dav1d_init_thread( void )
+{
+}
+
+COLD int dav1d_pthread_create( pthread_t* const thread,
+                               const pthread_attr_t* const attr,
+                               void* ( * const func )( void* ), void* const arg )
+{
+    std::function<void* ( )> fun = std::bind( func, arg );
+    std::shared_ptr<std::thread> thread_ = std::make_shared<std::thread>( fun );
+    pthread_cb cb;
+    cb.thread = thread_;
+    cb.id = pthread_manager::get_instance().get_next_id();
+    *thread = cb.id;
+    pthread_manager::get_instance().add_thread( cb );
+    return 0;
+}
+
+COLD int dav1d_pthread_join( pthread_t* thread, void** res )
+{
+    pthread_cb* cb = pthread_manager::get_instance().find_thread( *thread );
+    if( cb && cb->thread )
+    {
+        if( cb->thread->joinable() )
+        {
+            cb->thread->join();
+        }
+    }
+
+    return 0;
+}
+
+COLD int dav1d_pthread_once( pthread_once_t* const once_control,
+                             void ( * const init_routine )( void ) )
+{
+    BOOL pending = FALSE;
+
+    if( InitOnceBeginInitialize( once_control, 0, &pending, NULL ) != TRUE )
+        return 1;
+
+    if( pending == TRUE )
+        init_routine();
+
+    return !InitOnceComplete( once_control, 0, NULL );
+}
+
+int pthread_attr_init( pthread_attr_t* const attr )
+{
+    attr->stack_size = 0;
+    return 0;
+}
+
+int pthread_attr_destroy( pthread_attr_t* const attr )
+{
+    return 0;
+}
+
+int pthread_attr_setstacksize( pthread_attr_t* const attr,
+                                             const size_t stack_size )
+{
+    if( stack_size > UINT_MAX ) return 1;
+    attr->stack_size = (unsigned)stack_size;
+    return 0;
+}
+
+int pthread_attr_setdetachstate( pthread_attr_t* a, int state )
+{
+    return 0;
+}
+
+int pthread_setname_np( pthread_t __pthread, const char* __name )
+{
+    base::PlatformThread::SetName( __name );
+    return 0;
+}
+
+int pthread_getschedparam( pthread_t t, int* policy, struct sched_param* param )
+{
+    return 0;
+}
+
+int pthread_setschedparam( pthread_t t, int policy, const struct sched_param* param )
+{
+    return 0;
+}
+
+int sched_get_priority_min( int policy )
+{
+    return 0;
+}
+
+int sched_get_priority_max( int policy )
+{
+    return 100;
+}
+
+int pthread_self()
+{
+    return 0;
+}
+
+int sched_setscheduler( pid_t __pid, int __policy, const struct sched_param* __param )
+{
+    return 0;
+}
+
+int pthread_mutex_init( pthread_mutex_t* const mutex,
+                                      const void* const attr )
+{
+    InitializeSRWLock( mutex );
+    return 0;
+}
+
+int pthread_mutex_destroy( pthread_mutex_t* const mutex )
+{
+    return 0;
+}
+
+int pthread_mutex_lock( pthread_mutex_t* const mutex )
+{
+    AcquireSRWLockExclusive( mutex );
+    return 0;
+}
+
+int pthread_mutex_unlock( pthread_mutex_t* const mutex )
+{
+    ReleaseSRWLockExclusive( mutex );
+    return 0;
+}
+
+int pthread_cond_init( pthread_cond_t* const cond,
+                                     const void* const attr )
+{
+    InitializeConditionVariable( cond );
+    return 0;
+}
+
+int pthread_cond_destroy( pthread_cond_t* const cond )
+{
+    return 0;
+}
+
+int pthread_cond_wait( pthread_cond_t* const cond,
+                                     pthread_mutex_t* const mutex )
+{
+    return !SleepConditionVariableSRW( cond, mutex, INFINITE, 0 );
+}
+
+int pthread_cond_signal( pthread_cond_t* const cond )
+{
+    WakeConditionVariable( cond );
+    return 0;
+}
+
+int pthread_cond_broadcast( pthread_cond_t* const cond )
+{
+    WakeAllConditionVariable( cond );
+    return 0;
+}
+
 }
 
 #endif /* !defined(_WIN32) */
