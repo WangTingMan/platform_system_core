@@ -16,6 +16,7 @@
 
 #ifndef __CUTILS_MISC_H
 #define __CUTILS_MISC_H
+#include "cutils/cutils_export.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +27,7 @@ extern "C" {
          * sz is non-zero, return the size of the file via sz.
          * Returns 0 on failure.
          */
-extern void *load_file(const char *fn, unsigned *sz);
+CUTILS_EXPORT void *load_file(const char *fn, unsigned *sz);
 
         /* This is the range of UIDs (and GIDs) that are reserved
          * for assigning to applications.

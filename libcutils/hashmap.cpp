@@ -18,7 +18,11 @@
 
 #include <assert.h>
 #include <errno.h>
+#ifdef _MSC_VER
+#include <cutils/threads.h>
+#else
 #include <pthread.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>

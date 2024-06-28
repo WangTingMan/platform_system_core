@@ -56,7 +56,9 @@ struct dirent
 
 typedef struct dirent dirent;
 
-typedef int mode_t;
+#ifndef mode_t
+#define mode_t int
+#endif
 
 #ifdef __cplusplus
 extern "C" {

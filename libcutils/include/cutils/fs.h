@@ -18,7 +18,21 @@
 #define __CUTILS_FS_H
 
 #include <sys/types.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+
+#ifndef mode_t
+#define mode_t int
+#endif
+
+#ifndef uid_t
+#define uid_t int
+#endif
+
+#ifndef gid_t
+#define gid_t int
+#endif
 
 /*
  * TEMP_FAILURE_RETRY is defined by some, but not all, versions of

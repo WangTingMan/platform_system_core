@@ -25,6 +25,7 @@
 
 #ifdef __cplusplus
 #include <functional>
+#include <string>
 #endif
 
 #ifdef _WINSOCKAPI_

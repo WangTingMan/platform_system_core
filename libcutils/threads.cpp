@@ -33,6 +33,7 @@
 #include <vector>
 
 #include <base/threading/platform_thread.h>
+#include <base/strings/sys_string_conversions.h>
 
 #define COLD
 
@@ -147,7 +148,9 @@ extern "C" {
 struct pthread_cb
 {
     int id;
+    uint64_t underlying_id = 0;
     std::shared_ptr<std::thread> thread;
+    std::string thread_name;
 };
 
 class pthread_manager
@@ -164,6 +167,77 @@ public:
     void remove_thread( int id );
 
     int get_next_id();
+
+    void set_underlying_id
+        (
+        int id,
+        uint64_t underlying_id
+        )
+    {
+        std::lock_guard lker( m_mutex );
+        for (auto& ele : m_threads)
+        {
+            if (ele.id == id)
+            {
+                ele.underlying_id = underlying_id;
+                return;
+            }
+        }
+    }
+
+    uint64_t get_underlying_id(int id)
+    {
+        std::lock_guard lker(m_mutex);
+        for (auto& ele : m_threads)
+        {
+            if (ele.id == id)
+            {
+                return ele.underlying_id;
+            }
+        }
+        return 0;
+    }
+
+    int try_to_get_current_id()
+    {
+        uint64_t underly_id = gettid();
+        std::lock_guard lker(m_mutex);
+        for (auto& ele : m_threads)
+        {
+            if (ele.underlying_id == underly_id)
+            {
+                return ele.id;
+            }
+        }
+        return 0;
+    }
+
+    bool try_to_set_name_delay(int id, std::string name)
+    {
+        std::lock_guard lker(m_mutex);
+        for (auto& ele : m_threads)
+        {
+            if (ele.id == id)
+            {
+                ele.thread_name = name;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string try_to_get_reset_name(int id)
+    {
+        std::lock_guard lker(m_mutex);
+        for (auto& ele : m_threads)
+        {
+            if (ele.id == id)
+            {
+                return ele.thread_name;
+            }
+        }
+        return "";
+    }
 
 private:
 
@@ -216,6 +290,24 @@ int pthread_manager::get_next_id()
     return m_current_id++;
 }
 
+void thread_running_task
+    (
+    std::function<void()> a_detail_task,
+    int a_init_id
+    )
+{
+    auto preset_name = pthread_manager::get_instance()
+        .try_to_get_reset_name(a_init_id);
+    if (!preset_name.empty())
+    {
+        base::PlatformThread::SetName(preset_name);
+    }
+
+    uint64_t underly_id = GetCurrentThreadId();
+    pthread_manager::get_instance().set_underlying_id(a_init_id, underly_id);
+    a_detail_task();
+}
+
 COLD void dav1d_init_thread( void )
 {
 }
@@ -224,13 +316,14 @@ COLD int dav1d_pthread_create( pthread_t* const thread,
                                const pthread_attr_t* const attr,
                                void* ( * const func )( void* ), void* const arg )
 {
-    std::function<void* ( )> fun = std::bind( func, arg );
-    std::shared_ptr<std::thread> thread_ = std::make_shared<std::thread>( fun );
+    std::function<void()> fun = std::bind(func, arg);
     pthread_cb cb;
-    cb.thread = thread_;
     cb.id = pthread_manager::get_instance().get_next_id();
+    std::shared_ptr<std::thread> thread_ = std::make_shared<std::thread>
+        (thread_running_task, fun, cb.id);
+    cb.thread = thread_;
     *thread = cb.id;
-    pthread_manager::get_instance().add_thread( cb );
+    pthread_manager::get_instance().add_thread(cb);
     return 0;
 }
 
@@ -288,8 +381,34 @@ int pthread_attr_setdetachstate( pthread_attr_t* a, int state )
 
 int pthread_setname_np( pthread_t __pthread, const char* __name )
 {
-    base::PlatformThread::SetName( __name );
-    return 0;
+    auto current_id = pthread_manager::get_instance().try_to_get_current_id();
+    if (current_id == __pthread)
+    {
+        base::PlatformThread::SetName(__name);
+        return 0;
+    }
+
+    uint64_t underlying_id = pthread_manager::get_instance().get_underlying_id(__pthread);
+    if (underlying_id > 0)
+    {
+        HANDLE hdl = OpenThread(THREAD_ALL_ACCESS, FALSE, underlying_id);
+        if (NULL != hdl)
+        {
+            std::wstring thread_name = base::SysNativeMBToWide(__name);
+            SetThreadDescription(hdl, thread_name.c_str());
+            CloseHandle(hdl);
+            return 0;
+        }
+    }
+
+    bool preset = pthread_manager::get_instance().try_to_set_name_delay(__pthread, __name);
+    if (preset)
+    {
+        return 0;
+    }
+
+    LOG(ERROR) << "This thread is not managed by pthread manager. Cannot set name now";
+    return -1;
 }
 
 int pthread_getschedparam( pthread_t t, int* policy, struct sched_param* param )
@@ -314,7 +433,13 @@ int sched_get_priority_max( int policy )
 
 int pthread_self()
 {
-    return 0;
+    auto current_id = pthread_manager::get_instance().try_to_get_current_id();
+    if (current_id > 0)
+    {
+        return current_id;
+    }
+
+    return gettid();
 }
 
 int sched_setscheduler( pid_t __pid, int __policy, const struct sched_param* __param )
