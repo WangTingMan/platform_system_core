@@ -19,10 +19,18 @@ public:
 
     AutoHolder
         (
-        std::function<void()> a_fun_dctr_call
+        std::function<void()> a_fun_call,
+        bool a_is_ctr = false
         )
-        : m_fun_dctr_call( a_fun_dctr_call )
     {
+        if( a_is_ctr )
+        {
+            a_fun_call();
+        }
+        else
+        {
+            m_fun_dctr_call = a_fun_call;
+        }
     }
 
     ~AutoHolder()

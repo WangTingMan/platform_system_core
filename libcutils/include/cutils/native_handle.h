@@ -111,6 +111,8 @@ CUTILS_EXPORT void* dlopen( const char* filename, int flag );
 typedef void* ( *local_symbol_finder )( const char* p_name );
 CUTILS_EXPORT void* symbol_looper( void* p_lib, const char* p_name );
 CUTILS_EXPORT void register_local_symbol_finder( local_symbol_finder a_finder );
+CUTILS_EXPORT void register_local_symbol( void* symbol, const char* p_name );
+CUTILS_EXPORT void register_local_const_symbol( void const* symbol, const char* p_name );
 CUTILS_EXPORT int free_library( void* p_lib );
 
 #define dlclose(p_lib) free_library((p_lib))

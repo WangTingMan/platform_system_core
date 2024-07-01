@@ -379,10 +379,11 @@ int pthread_attr_setdetachstate( pthread_attr_t* a, int state )
     return 0;
 }
 
-int pthread_setname_np( pthread_t __pthread, const char* __name )
+int pthread_setname_np(pthread_t __pthread, const char* __name)
 {
     auto current_id = pthread_manager::get_instance().try_to_get_current_id();
-    if (current_id == __pthread)
+    if( ( current_id == __pthread ) ||
+        ( 0 == __pthread ) )
     {
         base::PlatformThread::SetName(__name);
         return 0;

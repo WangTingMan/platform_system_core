@@ -30,6 +30,7 @@
 
 #include <shared_mutex>
 #include <vector>
+#include <map>
 
 #ifdef __cplusplus
 extern "C" {
@@ -194,6 +195,7 @@ void* dlopen( const char* filename, int flag )
 
 static std::shared_mutex symbol_finders_mutex;
 static std::vector<local_symbol_finder> s_symbol_finders;
+static std::map<std::string, void*> s_registered_symbols;
 
 void register_local_symbol_finder( local_symbol_finder a_finder )
 {
@@ -205,6 +207,18 @@ int free_library( void* p_lib )
 {
     FreeLibrary( (HMODULE)( p_lib ) );
     return 0;
+}
+
+void register_local_symbol( void* symbol, const char* p_name )
+{
+    std::lock_guard<std::shared_mutex> locker( symbol_finders_mutex );
+    s_registered_symbols[p_name] = symbol;
+}
+
+void register_local_const_symbol(void const* symbol, const char* p_name)
+{
+    std::lock_guard<std::shared_mutex> locker(symbol_finders_mutex);
+    s_registered_symbols[p_name] = const_cast<void*>( symbol );
 }
 
 void* symbol_looper( void* p_lib, const char* p_name )
@@ -238,6 +252,12 @@ void* symbol_looper( void* p_lib, const char* p_name )
         }
     }
 
+    lcker.lock();
+    auto it = s_registered_symbols.find(p_name);
+    if( it != s_registered_symbols.end() )
+    {
+        return it->second;
+    }
     return nullptr;
 }
 
