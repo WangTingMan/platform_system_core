@@ -182,6 +182,6 @@ UTILS_EXPORT int get_timer_remaining_ms( uint32_t timer_id );
 #endif
 
 #ifdef __cplusplus
-UTILS_EXPORT uint32_t create_timer( std::function<void()> a_fun, std::string a_name = "" );
+UTILS_EXPORT uint32_t create_timer( std::function<void()> a_fun, std::string a_name = "", bool a_periodic = true );
 UTILS_EXPORT void set_timer_option( uint32_t timer_id, int milliseconds, std::function<void()> a_fun );
 #endif

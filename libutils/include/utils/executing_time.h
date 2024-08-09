@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <chrono>
 #include <list>
+#include <mutex>
 
 class UTILS_EXPORT executing_time
 {
