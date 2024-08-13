@@ -35,7 +35,10 @@ public:
 
     ~AutoHolder()
     {
-        m_fun_dctr_call();
+        if( m_fun_dctr_call )
+        {
+            m_fun_dctr_call();
+        }
     }
 
     AutoHolder( AutoHolder const& ) = delete;
