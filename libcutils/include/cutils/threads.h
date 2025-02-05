@@ -122,9 +122,16 @@ struct sched_param
     int sched_priority;
 };
 
+struct pthread_mutex_attribute
+{
+    void* p_local_attribute;
+};
+
 typedef SRWLOCK pthread_mutex_t;
 typedef CONDITION_VARIABLE pthread_cond_t;
 typedef INIT_ONCE pthread_once_t;
+
+typedef struct pthread_mutex_attribute pthread_mutexattr_t;
 
 CUTILS_EXPORT int dav1d_pthread_create( pthread_t* thread, const pthread_attr_t* attr,
                           void* ( *func )( void* ), void* arg );
@@ -162,12 +169,18 @@ CUTILS_EXPORT int pthread_self();
 #endif
 CUTILS_EXPORT int sched_setscheduler( pid_t __pid, int __policy, const struct sched_param* __param );
 
+CUTILS_EXPORT int pthread_mutexattr_init( pthread_mutexattr_t* a_mutext_attr);
+
+CUTILS_EXPORT int pthread_mutexattr_setprotocol( pthread_mutexattr_t* a_mutex_attr, int a_protocol);
+
 CUTILS_EXPORT int pthread_mutex_init( pthread_mutex_t* const mutex,
                                       const void* const attr );
 
 CUTILS_EXPORT int pthread_mutex_destroy( pthread_mutex_t* const mutex );
 
 CUTILS_EXPORT int pthread_mutex_lock( pthread_mutex_t* const mutex );
+
+CUTILS_EXPORT int pthread_mutex_timedlock( pthread_mutex_t* const mutex, struct timespec const* a_time );
 
 CUTILS_EXPORT int pthread_mutex_unlock( pthread_mutex_t* const mutex );
 
@@ -178,6 +191,9 @@ CUTILS_EXPORT int pthread_cond_destroy( pthread_cond_t* const cond );
 
 CUTILS_EXPORT int pthread_cond_wait( pthread_cond_t* const cond,
                                      pthread_mutex_t* const mutex );
+
+CUTILS_EXPORT int pthread_cond_timedwait( pthread_cond_t* const cond,
+                                     pthread_mutex_t* const mutex, struct timespec* time );
 
 CUTILS_EXPORT int pthread_cond_signal( pthread_cond_t* const cond );
 

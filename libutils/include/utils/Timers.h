@@ -127,7 +127,7 @@ UTILS_EXPORT int toMillisecondTimeoutDelay(nsecs_t referenceTime, nsecs_t timeou
 
 UTILS_EXPORT int gettimeofday(struct timeval* p, struct timezone* z);
 
-UTILS_EXPORT void localtime_r(const time_t *secs, struct tm *time);
+UTILS_EXPORT struct tm* localtime_r(const time_t *secs, struct tm *time);
 
 #if defined(_MSC_VER)
 

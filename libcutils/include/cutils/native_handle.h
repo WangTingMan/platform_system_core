@@ -104,6 +104,7 @@ CUTILS_EXPORT native_handle_t* native_handle_clone(const native_handle_t* handle
 CUTILS_EXPORT int native_handle_delete(native_handle_t* h);
 
 #define RTLD_NOW 0x00002 /* flag used by dlopen*/
+#define RTLD_LOCAL 0x0002
 CUTILS_EXPORT void* dlopen( const char* filename, int flag );
 
 #define RTLD_DEFAULT 0x00
