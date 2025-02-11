@@ -41,9 +41,11 @@
  */
 
 #define AID_ROOT 0 /* traditional unix root user */
-/* The following are for LTP and should only be used for testing */
-#define AID_DAEMON 1 /* traditional unix daemon owner */
-#define AID_BIN 2    /* traditional unix binaries owner */
+
+/* The following are for tests like LTP and should only be used for testing. */
+#define AID_DAEMON 1 /* Traditional unix daemon owner. */
+#define AID_BIN 2    /* Traditional unix binaries owner. */
+#define AID_SYS 3    /* A group with the same gid on Linux/macOS/Android. */
 
 #define AID_SYSTEM 1000 /* system server */
 
@@ -138,7 +140,12 @@
 #define AID_JC_IDENTITYCRED 1089  /* Javacard Identity Cred HAL - to manage omapi ARA rules */
 #define AID_SDK_SANDBOX 1090      /* SDK sandbox virtual UID */
 #define AID_SECURITY_LOG_WRITER 1091 /* write to security log */
-/* Changes to this file must be made in AOSP, *not* in internal branches. */
+#define AID_PRNG_SEEDER 1092         /* PRNG seeder daemon */
+#define AID_UPROBESTATS 1093         /* uid for uprobestats */
+#define AID_CROS_EC 1094             /* uid for accessing ChromeOS EC (cros_ec) */
+#define AID_MMD 1095                 /* uid for memory management daemon */
+// Additions to this file must be made in AOSP, *not* in internal branches.
+// You will also need to update expect_ids() in bionic/tests/grp_pwd_test.cpp.
 
 #define AID_SHELL 2000 /* adb and debug shell user */
 #define AID_CACHE 2001 /* cache access */
@@ -153,7 +160,7 @@
 #define AID_OEM_RESERVED_START 2900
 #define AID_OEM_RESERVED_END 2999
 
-/* The 3000 series are intended for use as supplemental group id's only.
+/* The 3000 series are intended for use as supplemental group ids only.
  * They indicate special Android capabilities that the kernel is aware of. */
 #define AID_NET_BT_ADMIN 3001 /* bluetooth: create any socket */
 #define AID_NET_BT 3002       /* bluetooth: create sco, rfcomm or l2cap sockets */
@@ -166,6 +173,9 @@
 #define AID_WAKELOCK 3010     /* Allow system wakelock read/write access */
 #define AID_UHID 3011         /* Allow read/write to /dev/uhid node */
 #define AID_READTRACEFS 3012  /* Allow tracefs read */
+#define AID_VIRTUALMACHINE 3013 /* Allows VMs to tune for performance*/
+// Additions to this file must be made in AOSP, *not* in internal branches.
+// You will also need to update expect_ids() in bionic/tests/grp_pwd_test.cpp.
 
 /* The range 5000-5999 is also reserved for vendor partition. */
 #define AID_OEM_RESERVED_2_START 5000

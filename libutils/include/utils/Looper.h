@@ -327,6 +327,12 @@ public:
     int addFd(int fd, int ident, int events, const sp<LooperCallback>& callback, void* data);
 
     /**
+     * May be useful for testing, instead of executing a looper on another thread for code expecting
+     * a looper, you can call callbacks directly.
+     */
+    bool getFdStateDebug(int fd, int* ident, int* events, sp<LooperCallback>* cb, void** data);
+
+    /**
      * Removes a previously added file descriptor from the looper.
      *
      * When this method returns, it is safe to close the file descriptor since the looper
@@ -347,6 +353,18 @@ public:
      * This method may block briefly if it needs to wake the poll.
      */
     int removeFd(int fd);
+
+    /**
+     * Tell the kernel to check for the same events we're already checking for
+     * with this FD. This is to be used when there is a kernel driver bug where
+     * the kernel does not properly mark itself as having new data available, in
+     * order to force "fd_op->poll()" to be called. You probably don't want to
+     * use this in general, and you shouldn't use it unless there is a plan to
+     * fix the kernel. See also b/296817256.
+     *
+     * Returns 1 if successfully repolled, 0 if not.
+     */
+    int repoll(int fd);
 
     /**
      * Enqueues a message to be processed by the specified handler.
@@ -495,8 +513,6 @@ private:
     void rebuildEpollLocked();
     void scheduleEpollRebuildLocked();
 
-    static void initTLSKey();
-    static void threadDestructor(void *st);
     static void initEpollEvent(struct epoll_event* eventItem);
 };
 

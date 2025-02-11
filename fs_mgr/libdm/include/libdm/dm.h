@@ -52,8 +52,8 @@ enum class DmDeviceState { INVALID, SUSPENDED, ACTIVE };
 
 static constexpr uint64_t kSectorSize = 512;
 
-// Returns `path` without /dev/block prefix if and only if `path` starts with
-// that prefix.
+// Returns `path` without /dev/block prefix if `path` starts with that prefix.
+// Or, if `path` is a symlink, do the same with its real path.
 std::optional<std::string> ExtractBlockDeviceName(const std::string& path);
 
 // This interface is for testing purposes. See DeviceMapper proper for what these methods do.
@@ -75,8 +75,10 @@ class IDeviceMapper {
                               const std::chrono::milliseconds& timeout_ms) = 0;
     virtual DmDeviceState GetState(const std::string& name) const = 0;
     virtual bool LoadTableAndActivate(const std::string& name, const DmTable& table) = 0;
+    virtual bool LoadTable(const std::string& name, const DmTable& table) = 0;
     virtual bool GetTableInfo(const std::string& name, std::vector<TargetInfo>* table) = 0;
     virtual bool GetTableStatus(const std::string& name, std::vector<TargetInfo>* table) = 0;
+    virtual bool GetTableStatusIma(const std::string& name, std::vector<TargetInfo>* table) = 0;
     virtual bool GetDmDevicePathByName(const std::string& name, std::string* path) = 0;
     virtual bool GetDeviceString(const std::string& name, std::string* dev) = 0;
     virtual bool DeleteDeviceIfExists(const std::string& name) = 0;
@@ -116,7 +118,7 @@ class DeviceMapper final : public IDeviceMapper {
         bool IsBufferFull() const { return flags_ & DM_BUFFER_FULL_FLAG; }
         bool IsInactiveTablePresent() const { return flags_ & DM_INACTIVE_PRESENT_FLAG; }
         bool IsReadOnly() const { return flags_ & DM_READONLY_FLAG; }
-        bool IsSuspended() const { return flags_ & DM_SUSPEND_FLAG; }
+        bool IsSuspended() const { return !IsActiveTablePresent() || (flags_ & DM_SUSPEND_FLAG); }
     };
 
     // Removes a device mapper device with the given name.
@@ -199,6 +201,12 @@ class DeviceMapper final : public IDeviceMapper {
     // Returns 'true' on success, false otherwise.
     bool LoadTableAndActivate(const std::string& name, const DmTable& table) override;
 
+    // Same as LoadTableAndActivate, but there is no resume step. This puts the
+    // new table in the inactive slot.
+    //
+    // Returns 'true' on success, false otherwise.
+    bool LoadTable(const std::string& name, const DmTable& table) override;
+
     // Returns true if a list of available device mapper targets registered in the kernel was
     // successfully read and stored in 'targets'. Returns 'false' otherwise.
     bool GetAvailableTargets(std::vector<DmTargetTypeInfo>* targets);
@@ -260,6 +268,12 @@ class DeviceMapper final : public IDeviceMapper {
     // false.
     bool GetTableStatus(const std::string& name, std::vector<TargetInfo>* table) override;
 
+    // Query the status of a table, given a device name. The output vector will
+    // contain IMA TargetInfo for each target in the table. If the device does
+    // not exist, or there were too many targets, the call will fail and return
+    // false.
+    bool GetTableStatusIma(const std::string& name, std::vector<TargetInfo>* table) override;
+
     // Identical to GetTableStatus, except also retrives the active table for the device
     // mapper device from the kernel.
     bool GetTableInfo(const std::string& name, std::vector<TargetInfo>* table) override;
@@ -284,6 +298,17 @@ class DeviceMapper final : public IDeviceMapper {
     //
     // Returns mapping <partition-name, /dev/block/dm-x>
     std::map<std::string, std::string> FindDmPartitions();
+
+    // Create a placeholder device. This is useful for ensuring that a uevent is in the pipeline,
+    // to reduce the amount of time a future WaitForDevice will block. On kernels < 5.15, this
+    // simply calls CreateEmptyDevice. On 5.15 and higher, it also loads (but does not activate)
+    // a placeholder table containing dm-error.
+    bool CreatePlaceholderDevice(const std::string& name);
+
+    bool GetDeviceNameAndUuid(dev_t dev, std::string* name, std::string* uuid);
+
+    // Send |message| to target, pointed by |name| and |sector|. Use 0 if |sector| is not needed.
+    bool SendMessage(const std::string& name, uint64_t sector, const std::string& message);
 
   private:
     // Maximum possible device mapper targets registered in the kernel.

@@ -27,12 +27,15 @@
 #include <unistd.h>
 
 #include <chrono>
-#include <sstream>
+#include <thread>
 
+#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/parseint.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
+#include <fs_mgr/file_wait.h>
+#include <libdm/dm.h>
 #include <snapuserd/snapuserd_client.h>
 
 namespace android {
@@ -60,6 +63,40 @@ SnapuserdClient::SnapuserdClient(android::base::unique_fd&& sockfd) : sockfd_(st
 
 static inline bool IsRetryErrno() {
     return errno == ECONNREFUSED || errno == EINTR || errno == ENOENT;
+}
+
+std::unique_ptr<SnapuserdClient> SnapuserdClient::TryConnect(const std::string& socket_name,
+                                                             std::chrono::milliseconds timeout_ms) {
+    unique_fd fd;
+    const auto start = std::chrono::steady_clock::now();
+    while (true) {
+        fd.reset(TEMP_FAILURE_RETRY(socket_local_client(
+                socket_name.c_str(), ANDROID_SOCKET_NAMESPACE_RESERVED, SOCK_STREAM)));
+        if (fd >= 0) {
+            auto client = std::make_unique<SnapuserdClient>(std::move(fd));
+            if (!client->ValidateConnection()) {
+                return nullptr;
+            }
+            return client;
+        }
+        if (errno == ENOENT) {
+            LOG(INFO) << "Daemon socket " << socket_name
+                      << " does not exist, return without waiting.";
+            return nullptr;
+        }
+        if (errno == ECONNREFUSED) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start);
+            if (elapsed >= timeout_ms) {
+                LOG(ERROR) << "Timed out connecting to snapuserd socket: " << socket_name;
+                return nullptr;
+            }
+            std::this_thread::sleep_for(10ms);
+        } else {
+            PLOG(ERROR) << "connect failed: " << socket_name;
+            return nullptr;
+        }
+    }
 }
 
 std::unique_ptr<SnapuserdClient> SnapuserdClient::Connect(const std::string& socket_name,
@@ -90,6 +127,21 @@ std::unique_ptr<SnapuserdClient> SnapuserdClient::Connect(const std::string& soc
         return nullptr;
     }
     return client;
+}
+
+void SnapuserdClient::WaitForServiceToTerminate(std::chrono::milliseconds timeout_ms) {
+    auto start = std::chrono::steady_clock::now();
+    while (android::base::GetProperty("init.svc.snapuserd", "") == "running") {
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start);
+        if (elapsed >= timeout_ms) {
+            LOG(ERROR) << "Timed out - Snapuserd service did not stop - Forcefully terminating the "
+                          "service";
+            android::base::SetProperty("ctl.stop", "snapuserd");
+            return;
+        }
+        std::this_thread::sleep_for(100ms);
+    }
 }
 
 bool SnapuserdClient::ValidateConnection() {
@@ -236,6 +288,8 @@ bool SnapuserdClient::DetachSnapuserd() {
         LOG(ERROR) << "Failed to detach snapuserd.";
         return false;
     }
+
+    WaitForServiceToTerminate(3s);
     return true;
 }
 
@@ -257,6 +311,11 @@ double SnapuserdClient::GetMergePercent() {
     }
     std::string response = Receivemsg();
 
+    // If server socket disconnects most likely because of device reboot,
+    // then we just return 0.
+    if (response.empty()) {
+        return 0.0;
+    }
     return std::stod(response);
 }
 
@@ -277,6 +336,57 @@ bool SnapuserdClient::QueryUpdateVerification() {
     }
     std::string response = Receivemsg();
     return response == "success";
+}
+
+std::string SnapuserdClient::GetDaemonAliveIndicatorPath() {
+    std::string metadata_dir;
+    std::string temp_metadata_mnt = "/mnt/scratch_ota_metadata_super";
+
+    auto& dm = ::android::dm::DeviceMapper::Instance();
+    auto partition_name = android::base::Basename(temp_metadata_mnt);
+
+    bool invalid_partition = (dm.GetState(partition_name) == dm::DmDeviceState::INVALID);
+    std::string temp_device;
+    if (!invalid_partition && dm.GetDmDevicePathByName(partition_name, &temp_device)) {
+        metadata_dir = temp_metadata_mnt + "/" + "ota/";
+    } else {
+        metadata_dir = "/metadata/ota/";
+    }
+
+    return metadata_dir + std::string(kDaemonAliveIndicator);
+}
+
+bool SnapuserdClient::IsTransitionedDaemonReady() {
+    if (!android::fs_mgr::WaitForFile(GetDaemonAliveIndicatorPath(), 10s)) {
+        LOG(ERROR) << "Timed out waiting for daemon indicator path: "
+                   << GetDaemonAliveIndicatorPath();
+        return false;
+    }
+
+    return true;
+}
+
+bool SnapuserdClient::RemoveTransitionedDaemonIndicator() {
+    std::string error;
+    std::string filePath = GetDaemonAliveIndicatorPath();
+    if (!android::base::RemoveFileIfExists(filePath, &error)) {
+        LOG(ERROR) << "Failed to remove DaemonAliveIndicatorPath - error: " << error;
+        return false;
+    }
+
+    if (!android::fs_mgr::WaitForFileDeleted(filePath, 5s)) {
+        LOG(ERROR) << "Timed out waiting for " << filePath << " to unlink";
+        return false;
+    }
+
+    return true;
+}
+
+void SnapuserdClient::NotifyTransitionDaemonIsReady() {
+    if (!android::base::WriteStringToFile("1", GetDaemonAliveIndicatorPath())) {
+        PLOG(ERROR) << "Unable to write daemon alive indicator path: "
+                    << GetDaemonAliveIndicatorPath();
+    }
 }
 
 }  // namespace snapshot

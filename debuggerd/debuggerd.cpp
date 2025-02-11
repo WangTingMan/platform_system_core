@@ -23,11 +23,11 @@
 #include <string_view>
 #include <thread>
 
-#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <android-base/parseint.h>
 #include <android-base/unique_fd.h>
 #include <debuggerd/client.h>
+#include <processgroup/processgroup.h>
 #include <procinfo/process.h>
 #include "util.h"
 
@@ -39,22 +39,6 @@ static void usage(int exit_code) {
   fprintf(stderr, "-b, --backtrace    just a backtrace rather than a full tombstone\n");
   fprintf(stderr, "-j                 collect java traces\n");
   _exit(exit_code);
-}
-
-static std::thread spawn_redirect_thread(unique_fd fd) {
-  return std::thread([fd{ std::move(fd) }]() {
-    while (true) {
-      char buf[BUFSIZ];
-      ssize_t rc = TEMP_FAILURE_RETRY(read(fd.get(), buf, sizeof(buf)));
-      if (rc <= 0) {
-        return;
-      }
-
-      if (!android::base::WriteFully(STDOUT_FILENO, buf, rc)) {
-        return;
-      }
-    }
-  });
 }
 
 int main(int argc, char* argv[]) {
@@ -107,14 +91,15 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  unique_fd piperead, pipewrite;
-  if (!Pipe(&piperead, &pipewrite)) {
-    err(1, "failed to create pipe");
-  }
+  // unfreeze if pid is frozen.
+  SetProcessProfiles(proc_info.uid, proc_info.pid, {"Unfrozen"});
+  // we don't restore the frozen state as this is considered a benign change.
 
-  std::thread redirect_thread = spawn_redirect_thread(std::move(piperead));
-  if (!debuggerd_trigger_dump(proc_info.pid, dump_type, 0, std::move(pipewrite))) {
-    redirect_thread.join();
+  unique_fd output_fd(fcntl(STDOUT_FILENO, F_DUPFD_CLOEXEC, 0));
+  if (output_fd.get() == -1) {
+    err(1, "failed to fcntl dup stdout");
+  }
+  if (!debuggerd_trigger_dump(proc_info.pid, dump_type, 0, std::move(output_fd))) {
     if (pid == proc_info.pid) {
       errx(1, "failed to dump process %d", pid);
     } else {
@@ -122,6 +107,5 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  redirect_thread.join();
   return 0;
 }

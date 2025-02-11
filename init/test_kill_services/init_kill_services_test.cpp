@@ -16,22 +16,40 @@
 
 #include <gtest/gtest.h>
 
+#include <android-base/logging.h>
 #include <android-base/properties.h>
+#include <hidl/ServiceManagement.h>
 
 #include <iostream>
 
 using ::android::base::GetProperty;
 using ::android::base::SetProperty;
+using ::android::base::WaitForProperty;
+using ::android::hardware::isHidlSupported;
+using std::literals::chrono_literals::operator""s;
 
 void ExpectKillingServiceRecovers(const std::string& service_name) {
+    if (!isHidlSupported() && service_name == "hwservicemanager") {
+        GTEST_SKIP() << "No HIDL support on device so hwservicemanager will not be running";
+    }
+    LOG(INFO) << "before we say hi to " << service_name << ", I can't have apexd around!";
+
+    // b/280514080 - servicemanager will restart apexd, and apexd will restart the
+    // system when crashed. This is fine as the device recovers, but it causes
+    // flakes in this test.
+    ASSERT_TRUE(WaitForProperty("init.svc.apexd", "stopped", 120s))
+            << (system("cat /dev/binderfs/binder_logs/state"), "apexd won't stop");
+
+    LOG(INFO) << "hello " << service_name << "!";
     const std::string status_prop = "init.svc." + service_name;
     const std::string pid_prop = "init.svc_debug_pid." + service_name;
 
     const std::string initial_pid = GetProperty(pid_prop, "");
 
-    EXPECT_EQ("running", GetProperty(status_prop, "")) << status_prop;
-    EXPECT_NE("", initial_pid) << pid_prop;
+    ASSERT_EQ("running", GetProperty(status_prop, "")) << status_prop;
+    ASSERT_NE("", initial_pid) << pid_prop;
 
+    LOG(INFO) << "okay, now goodbye " << service_name;
     EXPECT_EQ(0, system(("kill -9 " + initial_pid).c_str()));
 
     constexpr size_t kMaxWaitMilliseconds = 10000;
@@ -42,11 +60,16 @@ void ExpectKillingServiceRecovers(const std::string& service_name) {
     for (size_t retry = 0; retry < kRetryTimes; retry++) {
         const std::string& pid = GetProperty(pid_prop, "");
         if (pid != initial_pid && pid != "") break;
+        LOG(INFO) << "I said goodbye " << service_name << "!";
         usleep(kRetryWaitMilliseconds * 1000);
     }
 
+    LOG(INFO) << "are you still there " << service_name << "?";
+
     // svc_debug_pid is set after svc property
     EXPECT_EQ("running", GetProperty(status_prop, ""));
+
+    LOG(INFO) << "I'm done with " << service_name;
 }
 
 class InitKillServicesTest : public ::testing::TestWithParam<std::string> {};
@@ -64,6 +87,25 @@ static inline std::string PrintName(const testing::TestParamInfo<std::string>& i
     return info.param;
 }
 
-INSTANTIATE_TEST_CASE_P(DeathTest, InitKillServicesTest,
-                        ::testing::Values("lmkd", "ueventd", "hwservicemanager", "servicemanager"),
-                        PrintName);
+INSTANTIATE_TEST_CASE_P(
+        DeathTest, InitKillServicesTest,
+        ::testing::Values(
+                // clang-format off
+
+// TODO: we may want a more automatic way of testing this for services based on some
+// criteria (e.g. not disabled), but for now adding core services one at a time
+
+// BEGIN INTERNAL ONLY MERGE GUARD (add things here if internal only, move down later)
+// END INTERNAL ONLY MERGE GUARD
+
+// BEGIN AOSP ONLY (add things here if adding to AOSP)
+    "lmkd",
+    "ueventd",
+    "hwservicemanager",
+    "servicemanager",
+    "system_suspend"
+// END AOSP ONLY
+
+                // clang-format on
+                ),
+        PrintName);

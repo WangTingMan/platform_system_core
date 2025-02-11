@@ -18,7 +18,7 @@
 
 #include <utils/Printer.h>
 #include <utils/Errors.h>
-#include <utils/Log.h>
+#include <log/log.h>
 
 #ifndef _MSC_VER
 #include <unwindstack/AndroidUnwinder.h>
@@ -53,7 +53,7 @@ void CallStack::update(int32_t ignoreDepth, pid_t tid) {
     unwindstack::AndroidUnwinderData data;
     std::optional<pid_t> tid_val;
     if (tid != -1) {
-        *tid_val = tid;
+        tid_val = tid;
     }
     if (!unwinder.Unwind(tid_val, data)) {
         ALOGW("%s: Failed to unwind callstack: %s", __FUNCTION__, data.GetErrorString().c_str());
@@ -87,14 +87,15 @@ String8 CallStack::toString(const char* prefix) const {
 
 void CallStack::print(Printer& printer) const {
     for (size_t i = 0; i < mFrameLines.size(); i++) {
-        printer.printLine(mFrameLines[i]);
+        printer.printLine(mFrameLines[i].c_str());
     }
 }
 
 // The following four functions may be used via weak symbol references from libutils.
 // Clients assume that if any of these symbols are available, then deleteStack() is.
 
-#ifdef WEAKS_AVAILABLE
+// Apple and Windows does not support this, so only compile on other platforms.
+#if !defined(__APPLE__) && !defined(_WIN32)
 
 CallStack::CallStackUPtr CallStack::getCurrentInternal(int ignoreDepth) {
     CallStack::CallStackUPtr stack(new CallStack());
@@ -115,6 +116,6 @@ void CallStack::deleteStack(CallStack* stack) {
     delete stack;
 }
 
-#endif // WEAKS_AVAILABLE
+#endif  // !defined(__APPLE__) && !defined(_WIN32)
 
 }; // namespace android

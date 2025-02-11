@@ -33,6 +33,7 @@
 #include <ios>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -49,9 +50,12 @@ static int Usage(void) {
     std::cerr << "  create <dm-name> [-ro] <targets...>" << std::endl;
     std::cerr << "  delete <dm-name>" << std::endl;
     std::cerr << "  list <devices | targets> [-v]" << std::endl;
+    std::cerr << "  message <dm-name> <sector> <message>" << std::endl;
     std::cerr << "  getpath <dm-name>" << std::endl;
     std::cerr << "  getuuid <dm-name>" << std::endl;
+    std::cerr << "  ima <dm-name>" << std::endl;
     std::cerr << "  info <dm-name>" << std::endl;
+    std::cerr << "  replace <dm-name> <targets...>" << std::endl;
     std::cerr << "  status <dm-name>" << std::endl;
     std::cerr << "  resume <dm-name>" << std::endl;
     std::cerr << "  suspend <dm-name>" << std::endl;
@@ -113,6 +117,21 @@ class TargetParser final {
             std::string block_device = NextArg();
             return std::make_unique<DmTargetAndroidVerity>(start_sector, num_sectors, keyid,
                                                            block_device);
+        } else if (target_type == "striped") {
+            if (!HasArgs(3)) {
+                std::cerr << "Expected \"striped\" <block_device0> <block_device1> <chunksize>"
+                          << std::endl;
+                return nullptr;
+            }
+            std::string block_device0 = NextArg();
+            std::string block_device1 = NextArg();
+            uint64_t chunk_size;
+            if (!android::base::ParseUint(NextArg(), &chunk_size)) {
+                std::cerr << "Expected start sector, got: " << PreviousArg() << std::endl;
+                return nullptr;
+            }
+            return std::make_unique<DmTargetStripe>(start_sector, num_sectors, chunk_size,
+                                                    block_device0, block_device1);
         } else if (target_type == "bow") {
             if (!HasArgs(1)) {
                 std::cerr << "Expected \"bow\" <block_device>" << std::endl;
@@ -183,6 +202,48 @@ class TargetParser final {
             }
             std::string control_device = NextArg();
             return std::make_unique<DmTargetUser>(start_sector, num_sectors, control_device);
+        } else if (target_type == "error") {
+            return std::make_unique<DmTargetError>(start_sector, num_sectors);
+        } else if (target_type == "thin-pool") {
+            if (!HasArgs(4)) {
+                std::cerr << "Expected \"thin-pool\" <metadata dev> <data dev> <data block size> "
+                             "<low water mark> <feature args>"
+                          << std::endl;
+                return nullptr;
+            }
+
+            std::string metadata_dev = NextArg();
+            std::string data_dev = NextArg();
+            std::string data_block_size_str = NextArg();
+            std::string low_water_mark_str = NextArg();
+
+            uint64_t data_block_size;
+            if (!android::base::ParseUint(data_block_size_str, &data_block_size)) {
+                std::cerr << "Data block size must be an unsigned integer.\n";
+                return nullptr;
+            }
+            uint64_t low_water_mark;
+            if (!android::base::ParseUint(low_water_mark_str, &low_water_mark)) {
+                std::cerr << "Low water mark must be an unsigned integer.\n";
+                return nullptr;
+            }
+            return std::make_unique<DmTargetThinPool>(start_sector, num_sectors, metadata_dev,
+                                                      data_dev, data_block_size, low_water_mark);
+        } else if (target_type == "thin") {
+            if (!HasArgs(2)) {
+                std::cerr << "Expected \"thin\" <pool dev> <dev id>" << std::endl;
+                return nullptr;
+            }
+
+            std::string pool_dev = NextArg();
+            std::string dev_id_str = NextArg();
+
+            uint64_t dev_id;
+            if (!android::base::ParseUint(dev_id_str, &dev_id)) {
+                std::cerr << "Dev id must be an unsigned integer.\n";
+                return nullptr;
+            }
+            return std::make_unique<DmTargetThin>(start_sector, num_sectors, pool_dev, dev_id);
         } else {
             std::cerr << "Unrecognized target type: " << target_type << std::endl;
             return nullptr;
@@ -206,16 +267,26 @@ class TargetParser final {
     char** argv_;
 };
 
-static bool parse_table_args(DmTable* table, int argc, char** argv) {
+struct TableArgs {
+    DmTable table;
+    bool suspended = false;
+};
+
+static std::optional<TableArgs> parse_table_args(int argc, char** argv) {
+    TableArgs out;
+
     // Parse extended options first.
     int arg_index = 1;
     while (arg_index < argc && argv[arg_index][0] == '-') {
         if (strcmp(argv[arg_index], "-ro") == 0) {
-            table->set_readonly(true);
+            out.table.set_readonly(true);
+            arg_index++;
+        } else if (strcmp(argv[arg_index], "-suspended") == 0) {
+            out.suspended = true;
             arg_index++;
         } else {
             std::cerr << "Unrecognized option: " << argv[arg_index] << std::endl;
-            return -EINVAL;
+            return {};
         }
     }
 
@@ -223,35 +294,42 @@ static bool parse_table_args(DmTable* table, int argc, char** argv) {
     TargetParser parser(argc - arg_index, argv + arg_index);
     while (parser.More()) {
         std::unique_ptr<DmTarget> target = parser.Next();
-        if (!target || !table->AddTarget(std::move(target))) {
-            return -EINVAL;
+        if (!target || !out.table.AddTarget(std::move(target))) {
+            return {};
         }
     }
 
-    if (table->num_targets() == 0) {
+    if (out.table.num_targets() == 0) {
         std::cerr << "Must define at least one target." << std::endl;
-        return -EINVAL;
+        return {};
     }
-    return 0;
+    return {std::move(out)};
 }
 
 static int DmCreateCmdHandler(int argc, char** argv) {
     if (argc < 1) {
-        std::cerr << "Usage: dmctl create <dm-name> [-ro] <targets...>" << std::endl;
+        std::cerr << "Usage: dmctl create <dm-name> [--suspended] [-ro] <targets...>" << std::endl;
         return -EINVAL;
     }
     std::string name = argv[0];
 
-    DmTable table;
-    int ret = parse_table_args(&table, argc, argv);
-    if (ret) {
-        return ret;
+    auto table_args = parse_table_args(argc, argv);
+    if (!table_args) {
+        return -EINVAL;
     }
 
     std::string ignore_path;
     DeviceMapper& dm = DeviceMapper::Instance();
-    if (!dm.CreateDevice(name, table, &ignore_path, 5s)) {
+    if (!dm.CreateEmptyDevice(name)) {
         std::cerr << "Failed to create device-mapper device with name: " << name << std::endl;
+        return -EIO;
+    }
+    if (!dm.LoadTable(name, table_args->table)) {
+        std::cerr << "Failed to load table for dm device: " << name << std::endl;
+        return -EIO;
+    }
+    if (!table_args->suspended && !dm.ChangeState(name, DmDeviceState::ACTIVE)) {
+        std::cerr << "Failed to activate table for " << name << std::endl;
         return -EIO;
     }
     return 0;
@@ -269,7 +347,6 @@ static int DmDeleteCmdHandler(int argc, char** argv) {
         std::cerr << "Failed to delete [" << name << "]" << std::endl;
         return -EIO;
     }
-
     return 0;
 }
 
@@ -280,15 +357,18 @@ static int DmReplaceCmdHandler(int argc, char** argv) {
     }
     std::string name = argv[0];
 
-    DmTable table;
-    int ret = parse_table_args(&table, argc, argv);
-    if (ret) {
-        return ret;
+    auto table_args = parse_table_args(argc, argv);
+    if (!table_args) {
+        return -EINVAL;
     }
 
     DeviceMapper& dm = DeviceMapper::Instance();
-    if (!dm.LoadTableAndActivate(name, table)) {
+    if (!dm.LoadTable(name, table_args->table)) {
         std::cerr << "Failed to replace device-mapper table to: " << name << std::endl;
+        return -EIO;
+    }
+    if (!table_args->suspended && !dm.ChangeState(name, DmDeviceState::ACTIVE)) {
+        std::cerr << "Failed to activate table for " << name << std::endl;
         return -EIO;
     }
     return 0;
@@ -376,6 +456,24 @@ static int DmListCmdHandler(int argc, char** argv) {
 
     std::cerr << "Invalid argument to \'dmctl list\': " << argv[0] << std::endl;
     return -EINVAL;
+}
+
+static int DmMessageCmdHandler(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "Usage: dmctl message <name> <sector> <message>" << std::endl;
+        return -EINVAL;
+    }
+    uint64_t sector;
+    if (!android::base::ParseUint(argv[1], &sector)) {
+        std::cerr << "Invalid argument for sector: " << argv[1] << std::endl;
+        return -EINVAL;
+    }
+    DeviceMapper& dm = DeviceMapper::Instance();
+    if (!dm.SendMessage(argv[0], sector, argv[2])) {
+        std::cerr << "Could not send message to " << argv[0] << std::endl;
+        return -EINVAL;
+    }
+    return 0;
 }
 
 static int HelpCmdHandler(int /* argc */, char** /* argv */) {
@@ -470,7 +568,14 @@ static int DumpTable(const std::string& mode, int argc, char** argv) {
                       << std::endl;
             return -EINVAL;
         }
+    } else if (mode == "ima") {
+        if (!dm.GetTableStatusIma(argv[0], &table)) {
+            std::cerr << "Could not query table status of device \"" << argv[0] << "\"."
+                      << std::endl;
+            return -EINVAL;
+        }
     }
+
     std::cout << "Targets in the device-mapper table for " << argv[0] << ":" << std::endl;
     for (const auto& target : table) {
         std::cout << target.spec.sector_start << "-"
@@ -490,6 +595,10 @@ static int TableCmdHandler(int argc, char** argv) {
 
 static int StatusCmdHandler(int argc, char** argv) {
     return DumpTable("status", argc, argv);
+}
+
+static int ImaCmdHandler(int argc, char** argv) {
+    return DumpTable("ima", argc, argv);
 }
 
 static int ResumeCmdHandler(int argc, char** argv) {
@@ -526,12 +635,14 @@ static std::map<std::string, std::function<int(int, char**)>> cmdmap = {
         {"delete", DmDeleteCmdHandler},
         {"replace", DmReplaceCmdHandler},
         {"list", DmListCmdHandler},
+        {"message", DmMessageCmdHandler},
         {"help", HelpCmdHandler},
         {"getpath", GetPathCmdHandler},
         {"getuuid", GetUuidCmdHandler},
         {"info", InfoCmdHandler},
         {"table", TableCmdHandler},
         {"status", StatusCmdHandler},
+        {"ima", ImaCmdHandler},
         {"resume", ResumeCmdHandler},
         {"suspend", SuspendCmdHandler},
         // clang-format on

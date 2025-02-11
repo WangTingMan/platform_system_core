@@ -18,8 +18,11 @@ the system), so although this was the beginning of the end of toolbox it
 in Marshmallow we changed direction and started the move to toybox.
 
 Not everything is provided by toybox, though. For the bzip2 command-line tools
-we use the ones that are part of the bzip2 distribution. The awk added in
-Android P is Brian Kernighan's "one true" awk.
+we use the ones that are part of the bzip2 distribution.
+The awk added in Android P is the
+["one true" awk](https://github.com/onetrueawk/awk).
+The bc added in Android Q is
+[Gavin Howard's bc](https://github.com/gavinhoward/bc).
 
 The lists below show what tools were provided and where they came from in
 each release starting with Gingerbread. This doesn't tell the full story,
@@ -34,7 +37,7 @@ commands than there are symlinks for in `/system/bin`. You can get the
 full list for a release by running `toybox` directly.
 
 
-## Android 13 ("T")
+## Android 15 (API level 35, "Vanilla Ice Cream")
 
 BSD: fsck\_msdos newfs\_msdos
 
@@ -46,7 +49,81 @@ one-true-awk: awk
 
 toolbox: getevent getprop setprop start stop
 
-toybox (0.8.6-ish): [ acpi base64 basename blkdiscard blkid blockdev cal cat chattr chcon
+toybox ([0.8.11](https://landley.net/toybox/news.html#08-04-2024)-ish):
+[ acpi base64 basename blkdiscard blkid blockdev brctl cal cat chattr
+chcon chgrp chmod chown chroot chrt cksum clear cmp comm cp cpio cut
+date dd devmem df diff dirname dmesg dos2unix du echo egrep env expand
+expr fallocate false fgrep file find flock fmt free freeramdisk fsfreeze
+fsync getconf getenforce **getfattr** getopt **gpiodetect** **gpiofind**
+**gpioget** **gpioinfo** **gpioset** grep groups gunzip gzip head help hostname
+hwclock i2cdetect i2cdump i2cget i2cset **i2ctransfer** iconv id ifconfig
+inotifyd insmod install ionice iorenice iotop kill killall ln load\_policy
+log logger logname losetup ls lsattr lsmod lsof lspci lsusb makedevs
+md5sum **memeater** microcom mkdir mkfifo mknod mkswap mktemp modinfo modprobe
+more mount mountpoint mv nbd-client nc netcat netstat nice nl nohup
+nproc nsenter od partprobe paste patch pgrep pidof ping ping6 pivot\_root
+pkill pmap printenv printf prlimit ps pwd pwdx readelf readlink realpath
+renice restorecon rev rfkill rm rmdir rmmod rtcwake runcon sed sendevent
+seq setenforce **setfattr** setsid sha1sum sha224sum sha256sum sha384sum
+sha512sum sleep sort split stat strings stty swapoff swapon sync sysctl
+tac tail tar taskset tee test time timeout top touch tr traceroute
+traceroute6 true truncate tty tunctl uclampset ulimit umount uname
+uniq unix2dos unlink unshare uptime usleep uudecode uuencode uuidgen
+vconfig vi vmstat watch wc which whoami xargs xxd yes zcat
+
+Note: technically getfattr and setfattr were available in earlier versions,
+but the symlinks were missing until this release, so they were only available
+as `toybox getfattr` and `toybox setfattr` rather than directly.
+
+
+## Android 14 (API level 34, "Upside Down Cake")
+
+BSD: fsck\_msdos newfs\_msdos
+
+bzip2: bzcat bzip2 bunzip2
+
+gavinhoward/bc: bc
+
+one-true-awk: awk
+
+toolbox: getevent getprop setprop start stop
+
+toybox ([0.8.9](http://landley.net/toybox/#10-01-2023)-ish):
+[ acpi base64 basename blkdiscard blkid blockdev **brctl** cal cat chattr
+chcon chgrp chmod chown chroot chrt cksum clear cmp comm cp cpio cut
+date dd devmem df diff dirname dmesg dos2unix du echo egrep env expand
+expr fallocate false fgrep file find flock fmt free freeramdisk fsfreeze
+fsync getconf getenforce getfattr getopt grep groups gunzip gzip head
+help hostname hwclock i2cdetect i2cdump i2cget i2cset iconv id ifconfig
+inotifyd insmod install ionice iorenice iotop kill killall ln load\_policy
+log **logger** logname losetup ls lsattr lsmod lsof lspci lsusb makedevs
+md5sum microcom mkdir mkfifo mknod mkswap mktemp modinfo modprobe
+more mount mountpoint mv nbd-client nc netcat netstat nice nl nohup
+nproc nsenter od partprobe paste patch pgrep pidof ping ping6 pivot\_root
+pkill pmap printenv printf prlimit ps pwd pwdx readelf readlink realpath
+renice restorecon rev rfkill rm rmdir rmmod rtcwake runcon sed sendevent
+seq setenforce setfattr setsid sha1sum sha224sum sha256sum sha384sum
+sha512sum sleep sort split stat strings stty swapoff swapon sync sysctl
+tac tail tar taskset tee test time timeout top touch tr traceroute
+traceroute6 true truncate tty tunctl uclampset ulimit umount uname
+uniq unix2dos unlink unshare uptime usleep uudecode uuencode uuidgen
+vconfig vi vmstat watch wc which whoami xargs xxd yes zcat
+
+
+## Android 13 (33, "Tiramisu")
+
+BSD: fsck\_msdos newfs\_msdos
+
+bzip2: bzcat bzip2 bunzip2
+
+gavinhoward/bc: bc
+
+one-true-awk: awk
+
+toolbox: getevent getprop setprop start stop
+
+toybox ([0.8.6](http://landley.net/toybox/#30-11-2021)-ish):
+[ acpi base64 basename blkdiscard blkid blockdev cal cat chattr chcon
 chgrp chmod chown chroot chrt cksum clear cmp comm cp cpio cut date
 dd devmem df diff dirname dmesg dos2unix du echo egrep env expand
 expr fallocate false fgrep file find flock fmt free freeramdisk fsfreeze
@@ -67,7 +144,7 @@ uniq unix2dos unlink unshare uptime usleep uudecode uuencode uuidgen
 vconfig vi vmstat watch wc which whoami xargs xxd yes zcat
 
 
-## Android 12 ("S")
+## Android 12 (31, "Snow Cone")
 
 BSD: fsck\_msdos newfs\_msdos
 
@@ -79,7 +156,8 @@ one-true-awk: awk
 
 toolbox: getevent getprop setprop start stop
 
-toybox (0.8.4-ish): **[** acpi base64 basename **blkdiscard** blkid blockdev cal cat chattr chcon
+toybox ([0.8.4](http://landley.net/toybox/#24-10-2020)-ish):
+**[** acpi base64 basename **blkdiscard** blkid blockdev cal cat chattr chcon
 chgrp chmod chown chroot chrt cksum clear cmp comm cp cpio cut date
 dd devmem df diff dirname dmesg dos2unix du echo egrep env expand
 expr fallocate false fgrep file find flock fmt free freeramdisk fsfreeze
@@ -100,7 +178,7 @@ unlink unshare uptime usleep uudecode uuencode uuidgen vconfig vi
 vmstat watch wc which whoami xargs xxd yes zcat
 
 
-## Android 11 ("R")
+## Android 11 (API level 30, "Red Velvet Cake")
 
 BSD: fsck\_msdos newfs\_msdos
 
@@ -112,7 +190,8 @@ one-true-awk: awk
 
 toolbox: getevent getprop setprop start stop
 
-toybox (0.8.3-ish): acpi base64 basename blkid blockdev cal cat chattr chcon chgrp chmod
+toybox ([0.8.3](http://landley.net/toybox/#11-05-2020)-ish):
+acpi base64 basename blkid blockdev cal cat chattr chcon chgrp chmod
 chown chroot chrt cksum clear cmp comm cp cpio cut date dd **devmem**
 df diff dirname dmesg dos2unix du echo egrep env expand expr fallocate
 false fgrep file find flock fmt free freeramdisk fsfreeze **fsync** getconf
@@ -133,7 +212,7 @@ usleep uudecode uuencode uuidgen vconfig **vi** vmstat watch wc which
 whoami xargs xxd yes zcat
 
 
-## Android 10 ("Q")
+## Android 10 (API level 29, "Quince Tart")
 
 BSD: grep fsck\_msdos newfs\_msdos
 
@@ -143,7 +222,8 @@ one-true-awk: awk
 
 toolbox: getevent getprop
 
-toybox (0.8.0-ish): acpi base64 basename **bc** **blkid** blockdev cal cat **chattr** chcon chgrp
+toybox ([0.8.0](http://landley.net/toybox/#08-02-2019)-ish):
+acpi base64 basename **bc** **blkid** blockdev cal cat **chattr** chcon chgrp
 chmod chown chroot chrt cksum clear cmp comm cp cpio cut date dd df
 diff dirname dmesg dos2unix du echo **egrep** env expand expr fallocate
 false **fgrep** file find flock fmt free **freeramdisk** **fsfreeze** **getconf**
@@ -164,7 +244,7 @@ true truncate tty **tunctl** ulimit umount uname uniq unix2dos **unlink**
 wc which whoami xargs xxd yes zcat
 
 
-## Android 9.0 (Pie)
+## Android 9.0 (API level 28, "Pie")
 
 BSD: dd grep
 
@@ -174,7 +254,8 @@ one-true-awk: awk
 
 toolbox: getevent getprop newfs\_msdos
 
-toybox (0.7.6-ish): acpi base64 basename blockdev cal cat chcon chgrp chmod chown
+toybox ([0.7.6](http://landley.net/toybox/#24-02-2018)-ish):
+acpi base64 basename blockdev cal cat chcon chgrp chmod chown
 chroot chrt cksum clear cmp comm cp cpio cut date df diff dirname dmesg
 dos2unix du echo env expand expr fallocate false file find flock **fmt** free
 getenforce groups gunzip gzip head hostname hwclock id ifconfig inotifyd
@@ -190,7 +271,7 @@ umount uname uniq unix2dos uptime usleep uudecode uuencode vmstat wc
 which whoami xargs xxd yes zcat
 
 
-## Android 8.0 (Oreo)
+## Android 8.0 (API level 26, "Oreo")
 
 BSD: dd grep
 
@@ -198,7 +279,8 @@ bzip2: bzcat bzip2 bunzip2
 
 toolbox: getevent newfs\_msdos
 
-toybox (0.7.3-ish): acpi base64 basename blockdev cal cat chcon chgrp chmod chown
+toybox ([0.7.3](http://landley.net/toybox/#21-02-2017)-ish):
+acpi base64 basename blockdev cal cat chcon chgrp chmod chown
 chroot chrt cksum clear cmp comm cp cpio cut date df **diff** dirname dmesg
 dos2unix du echo env expand expr fallocate false **file** find flock free
 getenforce getprop groups **gunzip** **gzip** head hostname hwclock id ifconfig
@@ -214,14 +296,15 @@ tty ulimit umount uname uniq unix2dos uptime usleep **uudecode** **uuencode**
 vmstat wc which whoami xargs xxd yes **zcat**
 
 
-## Android 7.0 (Nougat)
+## Android 7.0 (API level 24, "Nougat")
 
 BSD: dd grep
 
 toolbox: getevent iftop ioctl log nandread newfs\_msdos ps prlimit
 sendevent start stop top
 
-toybox (0.7.0-ish): acpi **base64** basename blockdev bzcat cal cat chcon chgrp chmod
+toybox ([0.7.0](http://landley.net/toybox/#02-02-2016)-ish):
+acpi **base64** basename blockdev bzcat cal cat chcon chgrp chmod
 chown chroot cksum clear comm cmp cp cpio cut date **df** dirname dmesg
 dos2unix **du** echo env expand expr fallocate false find **flock** free
 getenforce getprop groups head hostname hwclock id ifconfig inotifyd
@@ -235,14 +318,15 @@ time timeout touch tr true truncate **tty** **ulimit** umount uname uniq unix2do
 **uptime** usleep vmstat wc which whoami xargs **xxd** yes
 
 
-## Android 6.0 (Marshmallow)
+## Android 6.0 (API level 23, "Marshmallow")
 
 BSD: dd du grep
 
 toolbox: df getevent iftop ioctl ionice log ls lsof mount nandread
 newfs\_msdos ps prlimit renice sendevent start stop top uptime watchprops
 
-toybox (0.5.2-ish): acpi basename blockdev bzcat cal cat chcon chgrp chmod chown
+toybox ([0.5.2](http://landley.net/toybox/#25-02-2015)-ish):
+acpi basename blockdev bzcat cal cat chcon chgrp chmod chown
 chroot cksum clear comm cmp cp cpio cut date dirname dmesg dos2unix echo
 env expand expr fallocate false find free getenforce getprop groups
 head hostname hwclock id ifconfig inotifyd insmod kill load\_policy ln
@@ -255,7 +339,7 @@ time timeout touch tr true truncate umount uname uniq unix2dos usleep
 vmstat wc which whoami xargs yes
 
 
-## Android 5.0 (Lollipop)
+## Android 5.0 (API level 21, "Lollipop")
 
 BSD: cat chown cp dd du grep kill ln mv printenv rm rmdir sleep sync
 
@@ -267,7 +351,7 @@ sendevent setenforce setprop setsebool smd start stop swapoff swapon
 top touch umount uptime vmstat watchprops wipe
 
 
-## Android 4.4 (KitKat)
+## Android 4.4 (API level 19, "KitKat")
 
 BSD: cat cp dd du grep newfs\_msdos
 
@@ -279,7 +363,7 @@ schedtop sendevent setconsole setenforce setprop setsebool sleep smd start
 stop swapoff swapon sync top touch umount uptime vmstat watchprops wipe
 
 
-## Android 4.1-4.3 (JellyBean)
+## Android 4.1-4.3 (API level 16, "Jelly Bean")
 
 BSD: cat cp dd du grep newfs\_msdos
 
@@ -291,7 +375,7 @@ sendevent setconsole setenforce setprop setsebool sleep smd start stop
 sync top touch umount uptime vmstat watchprops wipe
 
 
-## Android 4.0 (IceCreamSandwich)
+## Android 4.0 (API level 14, "Ice Cream Sandwich")
 
 BSD: cat dd newfs\_msdos
 
@@ -302,7 +386,7 @@ schedtop sendevent setconsole setprop sleep smd start stop sync top
 touch umount uptime vmstat watchprops wipe
 
 
-## Android 2.3 (Gingerbread)
+## Android 2.3 (API level 9, "Gingerbread")
 
 BSD: cat dd newfs\_msdos
 

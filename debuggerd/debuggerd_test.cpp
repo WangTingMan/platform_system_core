@@ -18,8 +18,11 @@
 #include <dlfcn.h>
 #include <err.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <linux/prctl.h>
 #include <malloc.h>
+#include <pthread.h>
+#include <setjmp.h>
 #include <stdlib.h>
 #include <sys/capability.h>
 #include <sys/mman.h>
@@ -36,6 +39,8 @@
 #include <string>
 #include <thread>
 
+#include <android/crash_detail.h>
+#include <android/dlext.h>
 #include <android/fdsan.h>
 #include <android/set_abort_message.h>
 #include <bionic/malloc.h>
@@ -64,7 +69,8 @@
 
 #include "crash_test.h"
 #include "debuggerd/handler.h"
-#include "libdebuggerd/utility.h"
+#include "gtest/gtest.h"
+#include "libdebuggerd/utility_host.h"
 #include "protocol.h"
 #include "tombstoned/tombstoned.h"
 #include "util.h"
@@ -91,7 +97,7 @@ constexpr char kWaitForDebuggerKey[] = "debug.debuggerd.wait_for_debugger";
     if (sigaction(SIGALRM, &new_sigaction, &old_sigaction) != 0) { \
       err(1, "sigaction failed");                                  \
     }                                                              \
-    alarm(seconds);                                                \
+    alarm(seconds * android::base::HwTimeoutMultiplier());         \
     auto value = expr;                                             \
     int saved_errno = errno;                                       \
     if (sigaction(SIGALRM, &old_sigaction, nullptr) != 0) {        \
@@ -110,21 +116,8 @@ constexpr char kWaitForDebuggerKey[] = "debug.debuggerd.wait_for_debugger";
   ASSERT_MATCH(result,                             \
                R"(#\d\d pc [0-9a-f]+\s+ \S+ (\(offset 0x[0-9a-f]+\) )?\()" frame_name R"(\+)");
 
-// Enable GWP-ASan at the start of this process. GWP-ASan is enabled using
-// process sampling, so we need to ensure we force GWP-ASan on.
-__attribute__((constructor)) static void enable_gwp_asan() {
-  android_mallopt_gwp_asan_options_t opts;
-  // No, we're not an app, but let's turn ourselves on without sampling.
-  // Technically, if someone's using the *.default_app sysprops, they'll adjust
-  // our settings, but I don't think this will be common on a device that's
-  // running debuggerd_tests.
-  opts.desire = android_mallopt_gwp_asan_options_t::Action::TURN_ON_FOR_APP;
-  opts.program_name = "";
-  android_mallopt(M_INITIALIZE_GWP_ASAN, &opts, sizeof(android_mallopt_gwp_asan_options_t));
-}
-
 static void tombstoned_intercept(pid_t target_pid, unique_fd* intercept_fd, unique_fd* output_fd,
-                                 InterceptStatus* status, DebuggerdDumpType intercept_type) {
+                                 InterceptResponse* response, DebuggerdDumpType intercept_type) {
   intercept_fd->reset(socket_local_client(kTombstonedInterceptSocketName,
                                           ANDROID_SOCKET_NAMESPACE_RESERVED, SOCK_SEQPACKET));
   if (intercept_fd->get() == -1) {
@@ -165,18 +158,15 @@ static void tombstoned_intercept(pid_t target_pid, unique_fd* intercept_fd, uniq
     FAIL() << "failed to send output fd to tombstoned: " << strerror(errno);
   }
 
-  InterceptResponse response;
-  rc = TEMP_FAILURE_RETRY(read(intercept_fd->get(), &response, sizeof(response)));
+  rc = TEMP_FAILURE_RETRY(read(intercept_fd->get(), response, sizeof(*response)));
   if (rc == -1) {
     FAIL() << "failed to read response from tombstoned: " << strerror(errno);
   } else if (rc == 0) {
     FAIL() << "failed to read response from tombstoned (EOF)";
-  } else if (rc != sizeof(response)) {
-    FAIL() << "received packet of unexpected length from tombstoned: expected " << sizeof(response)
+  } else if (rc != sizeof(*response)) {
+    FAIL() << "received packet of unexpected length from tombstoned: expected " << sizeof(*response)
            << ", received " << rc;
   }
-
-  *status = response.status;
 }
 
 static bool pac_supported() {
@@ -235,9 +225,10 @@ void CrasherTest::StartIntercept(unique_fd* output_fd, DebuggerdDumpType interce
     FAIL() << "crasher hasn't been started";
   }
 
-  InterceptStatus status;
-  tombstoned_intercept(crasher_pid, &this->intercept_fd, output_fd, &status, intercept_type);
-  ASSERT_EQ(InterceptStatus::kRegistered, status);
+  InterceptResponse response = {};
+  tombstoned_intercept(crasher_pid, &this->intercept_fd, output_fd, &response, intercept_type);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
 }
 
 void CrasherTest::FinishIntercept(int* result) {
@@ -310,24 +301,7 @@ void CrasherTest::AssertDeath(int signo) {
 }
 
 static void ConsumeFd(unique_fd fd, std::string* output) {
-  constexpr size_t read_length = PAGE_SIZE;
-  std::string result;
-
-  while (true) {
-    size_t offset = result.size();
-    result.resize(result.size() + PAGE_SIZE);
-    ssize_t rc = TEMP_FAILURE_RETRY(read(fd.get(), &result[offset], read_length));
-    if (rc == -1) {
-      FAIL() << "read failed: " << strerror(errno);
-    } else if (rc == 0) {
-      result.resize(result.size() - PAGE_SIZE);
-      break;
-    }
-
-    result.resize(result.size() - PAGE_SIZE + rc);
-  }
-
-  *output = std::move(result);
+  ASSERT_TRUE(android::base::ReadFdToString(fd, output));
 }
 
 class LogcatCollector {
@@ -359,12 +333,7 @@ TEST_F(CrasherTest, smoke) {
 
   std::string result;
   ConsumeFd(std::move(output_fd), &result);
-#ifdef __LP64__
-  ASSERT_MATCH(result,
-               R"(signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\), fault addr 0x000000000000dead)");
-#else
-  ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\), fault addr 0x0000dead)");
-#endif
+  ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\), fault addr 0x0+dead)");
 
   if (mte_supported()) {
     // Test that the default TAGGED_ADDR_CTRL value is set.
@@ -406,10 +375,10 @@ TEST_F(CrasherTest, tagged_fault_addr) {
       result, R"(signal 11 \(SIGSEGV\), code 1 \(SEGV_MAPERR\), fault addr 0x[01]00000000000dead)");
 }
 
-// Marked as weak to prevent the compiler from removing the malloc in the caller. In theory, the
-// compiler could still clobber the argument register before trapping, but that's unlikely.
-__attribute__((weak)) void CrasherTest::Trap(void* ptr ATTRIBUTE_UNUSED) {
-  __builtin_trap();
+void CrasherTest::Trap(void* ptr) {
+  void (*volatile f)(void*) = nullptr;
+  __asm__ __volatile__("" : : "r"(f) : "memory");
+  f(ptr);
 }
 
 TEST_F(CrasherTest, heap_addr_in_register) {
@@ -445,6 +414,8 @@ TEST_F(CrasherTest, heap_addr_in_register) {
   ASSERT_MATCH(result, "memory near x0 \\(\\[anon:");
 #elif defined(__arm__)
   ASSERT_MATCH(result, "memory near r0 \\(\\[anon:");
+#elif defined(__riscv)
+  ASSERT_MATCH(result, "memory near a0 \\(\\[anon:");
 #elif defined(__x86_64__)
   ASSERT_MATCH(result, "memory near rdi \\(\\[anon:");
 #else
@@ -465,76 +436,6 @@ static void SetTagCheckingLevelAsync() {
   }
 }
 #endif
-
-// Number of iterations required to reliably guarantee a GWP-ASan crash.
-// GWP-ASan's sample rate is not truly nondeterministic, it initialises a
-// thread-local counter at 2*SampleRate, and decrements on each malloc(). Once
-// the counter reaches zero, we provide a sampled allocation. Then, double that
-// figure to allow for left/right allocation alignment, as this is done randomly
-// without bias.
-#define GWP_ASAN_ITERATIONS_TO_ENSURE_CRASH (0x20000)
-
-struct GwpAsanTestParameters {
-  size_t alloc_size;
-  bool free_before_access;
-  int access_offset;
-  std::string cause_needle; // Needle to be found in the "Cause: [GWP-ASan]" line.
-};
-
-struct GwpAsanCrasherTest : CrasherTest, testing::WithParamInterface<GwpAsanTestParameters> {};
-
-GwpAsanTestParameters gwp_asan_tests[] = {
-  {/* alloc_size */ 7, /* free_before_access */ true, /* access_offset */ 0, "Use After Free, 0 bytes into a 7-byte allocation"},
-  {/* alloc_size */ 7, /* free_before_access */ true, /* access_offset */ 1, "Use After Free, 1 byte into a 7-byte allocation"},
-  {/* alloc_size */ 7, /* free_before_access */ false, /* access_offset */ 16, "Buffer Overflow, 9 bytes right of a 7-byte allocation"},
-  {/* alloc_size */ 16, /* free_before_access */ false, /* access_offset */ -1, "Buffer Underflow, 1 byte left of a 16-byte allocation"},
-};
-
-INSTANTIATE_TEST_SUITE_P(GwpAsanTests, GwpAsanCrasherTest, testing::ValuesIn(gwp_asan_tests));
-
-TEST_P(GwpAsanCrasherTest, gwp_asan_uaf) {
-  if (mte_supported()) {
-    // Skip this test on MTE hardware, as MTE will reliably catch these errors
-    // instead of GWP-ASan.
-    GTEST_SKIP() << "Skipped on MTE.";
-  }
-  // Skip this test on HWASan, which will reliably catch test errors as well.
-  SKIP_WITH_HWASAN;
-
-  GwpAsanTestParameters params = GetParam();
-  LogcatCollector logcat_collector;
-
-  int intercept_result;
-  unique_fd output_fd;
-  StartProcess([&params]() {
-    for (unsigned i = 0; i < GWP_ASAN_ITERATIONS_TO_ENSURE_CRASH; ++i) {
-      volatile char* p = reinterpret_cast<volatile char*>(malloc(params.alloc_size));
-      if (params.free_before_access) free(static_cast<void*>(const_cast<char*>(p)));
-      p[params.access_offset] = 42;
-      if (!params.free_before_access) free(static_cast<void*>(const_cast<char*>(p)));
-    }
-  });
-
-  StartIntercept(&output_fd);
-  FinishCrasher();
-  AssertDeath(SIGSEGV);
-  FinishIntercept(&intercept_result);
-
-  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
-
-  std::vector<std::string> log_sources(2);
-  ConsumeFd(std::move(output_fd), &log_sources[0]);
-  logcat_collector.Collect(&log_sources[1]);
-
-  for (const auto& result : log_sources) {
-    ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code 2 \(SEGV_ACCERR\))");
-    ASSERT_MATCH(result, R"(Cause: \[GWP-ASan\]: )" + params.cause_needle);
-    if (params.free_before_access) {
-      ASSERT_MATCH(result, R"(deallocated by thread .*\n.*#00 pc)");
-    }
-    ASSERT_MATCH(result, R"((^|\s)allocated by thread .*\n.*#00 pc)");
-  }
-}
 
 struct SizeParamCrasherTest : CrasherTest, testing::WithParamInterface<size_t> {};
 
@@ -697,6 +598,54 @@ TEST_P(SizeParamCrasherTest, mte_underflow) {
 #endif
 }
 
+__attribute__((noinline)) void mte_illegal_setjmp_helper(jmp_buf& jump_buf) {
+  // This frame is at least 8 bytes for storing and restoring the LR before the
+  // setjmp below. So this can never get an empty stack frame, even if we omit
+  // the frame pointer. So, the SP of this is always less (numerically) than the
+  // calling function frame.
+  setjmp(jump_buf);
+}
+
+TEST_F(CrasherTest, DISABLED_mte_illegal_setjmp) {
+  // This setjmp is illegal because it jumps back into a function that already returned.
+  // Quoting man 3 setjmp:
+  //     If the function which called setjmp() returns before longjmp() is
+  //     called, the behavior is undefined.  Some kind of subtle or
+  //     unsubtle chaos is sure to result.
+  // https://man7.org/linux/man-pages/man3/longjmp.3.html
+#if defined(__aarch64__)
+  if (!mte_supported()) {
+    GTEST_SKIP() << "Requires MTE";
+  }
+
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([&]() {
+    SetTagCheckingLevelSync();
+    jmp_buf jump_buf;
+    mte_illegal_setjmp_helper(jump_buf);
+    longjmp(jump_buf, 1);
+  });
+
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+
+  // In our test-case, we have a NEGATIVE stack adjustment, which is being
+  // interpreted as unsigned integer, and thus is "too large".
+  // TODO(fmayer): fix the error message for this
+  ASSERT_MATCH(result, R"(memtag_handle_longjmp: stack adjustment too large)");
+#else
+  GTEST_SKIP() << "Requires aarch64";
+#endif
+}
+
 TEST_F(CrasherTest, mte_async) {
 #if defined(__aarch64__)
   if (!mte_supported()) {
@@ -721,7 +670,7 @@ TEST_F(CrasherTest, mte_async) {
   std::string result;
   ConsumeFd(std::move(output_fd), &result);
 
-  ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code 8 \(SEGV_MTEAERR\), fault addr --------)");
+  ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code [89] \(SEGV_MTE[AS]ERR\), fault addr)");
 #else
   GTEST_SKIP() << "Requires aarch64";
 #endif
@@ -828,7 +777,7 @@ TEST_F(CrasherTest, mte_register_tag_dump) {
 
   StartIntercept(&output_fd);
   FinishCrasher();
-  AssertDeath(SIGTRAP);
+  AssertDeath(SIGSEGV);
   FinishIntercept(&intercept_result);
 
   ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
@@ -1034,6 +983,233 @@ TEST_F(CrasherTest, abort_message) {
   std::string result;
   ConsumeFd(std::move(output_fd), &result);
   ASSERT_MATCH(result, R"(Abort message: 'x{4045}')");
+}
+
+static char g_crash_detail_value_changes[] = "crash_detail_value";
+static char g_crash_detail_value[] = "crash_detail_value";
+static char g_crash_detail_value2[] = "crash_detail_value2";
+
+inline crash_detail_t* _Nullable android_register_crash_detail_strs(const char* _Nonnull name,
+                                                                    const char* _Nonnull data) {
+  return android_crash_detail_register(name, strlen(name), data, strlen(data));
+}
+
+TEST_F(CrasherTest, crash_detail_single) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME", g_crash_detail_value);
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: 'crash_detail_value')");
+}
+
+TEST_F(CrasherTest, crash_detail_replace_data) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    auto *cd = android_register_crash_detail_strs("CRASH_DETAIL_NAME", "original_data");
+    android_crash_detail_replace_data(cd, "new_data", strlen("new_data"));
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: 'new_data')");
+  // Ensure the old one no longer shows up, i.e. that we actually replaced
+  // it, not added a new one.
+  ASSERT_NOT_MATCH(result, R"(CRASH_DETAIL_NAME: 'original_data')");
+}
+
+TEST_F(CrasherTest, crash_detail_replace_name) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    auto *cd = android_register_crash_detail_strs("old_name", g_crash_detail_value);
+    android_crash_detail_replace_name(cd, "new_name", strlen("new_name"));
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(new_name: 'crash_detail_value')");
+  // Ensure the old one no longer shows up, i.e. that we actually replaced
+  // it, not added a new one.
+  ASSERT_NOT_MATCH(result, R"(old_name: 'crash_detail_value')");
+}
+
+TEST_F(CrasherTest, crash_detail_single_byte_name) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME\1", g_crash_detail_value);
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME\\1: 'crash_detail_value')");
+}
+
+
+TEST_F(CrasherTest, crash_detail_single_bytes) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    android_crash_detail_register("CRASH_DETAIL_NAME", strlen("CRASH_DETAIL_NAME"), "\1",
+                                  sizeof("\1"));
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: '\\1\\0')");
+}
+
+TEST_F(CrasherTest, crash_detail_mixed) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    const char data[] = "helloworld\1\255\3";
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME", data);
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: 'helloworld\\1\\255\\3')");
+}
+
+TEST_F(CrasherTest, crash_detail_many) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    for (int i = 0; i < 1000; ++i) {
+      std::string name = "CRASH_DETAIL_NAME" + std::to_string(i);
+      std::string value = "CRASH_DETAIL_VALUE" + std::to_string(i);
+      auto* h = android_register_crash_detail_strs(name.data(), value.data());
+      android_crash_detail_unregister(h);
+    }
+
+    android_register_crash_detail_strs("FINAL_NAME", "FINAL_VALUE");
+    android_register_crash_detail_strs("FINAL_NAME2", "FINAL_VALUE2");
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_NOT_MATCH(result, "CRASH_DETAIL_NAME");
+  ASSERT_NOT_MATCH(result, "CRASH_DETAIL_VALUE");
+  ASSERT_MATCH(result, R"(FINAL_NAME: 'FINAL_VALUE')");
+  ASSERT_MATCH(result, R"(FINAL_NAME2: 'FINAL_VALUE2')");
+}
+
+TEST_F(CrasherTest, crash_detail_single_changes) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME", g_crash_detail_value_changes);
+    g_crash_detail_value_changes[0] = 'C';
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: 'Crash_detail_value')");
+}
+
+TEST_F(CrasherTest, crash_detail_multiple) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME", g_crash_detail_value);
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME2", g_crash_detail_value2);
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME: 'crash_detail_value')");
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME2: 'crash_detail_value2')");
+}
+
+TEST_F(CrasherTest, crash_detail_remove) {
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([]() {
+    auto* detail1 = android_register_crash_detail_strs("CRASH_DETAIL_NAME", g_crash_detail_value);
+    android_crash_detail_unregister(detail1);
+    android_register_crash_detail_strs("CRASH_DETAIL_NAME2", g_crash_detail_value2);
+    abort();
+  });
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_NOT_MATCH(result, R"(CRASH_DETAIL_NAME: 'crash_detail_value')");
+  ASSERT_MATCH(result, R"(CRASH_DETAIL_NAME2: 'crash_detail_value2')");
 }
 
 TEST_F(CrasherTest, abort_message_newline_trimmed) {
@@ -1276,7 +1452,11 @@ TEST_F(CrasherTest, fake_pid) {
 static const char* const kDebuggerdSeccompPolicy =
     "/system/etc/seccomp_policy/crash_dump." ABI_STRING ".policy";
 
-static pid_t seccomp_fork_impl(void (*prejail)()) {
+static void setup_jail(minijail* jail) {
+  if (!jail) {
+    LOG(FATAL) << "failed to create minijail";
+  }
+
   std::string policy;
   if (!android::base::ReadFileToString(kDebuggerdSeccompPolicy, &policy)) {
     PLOG(FATAL) << "failed to read policy file";
@@ -1303,15 +1483,15 @@ static pid_t seccomp_fork_impl(void (*prejail)()) {
     PLOG(FATAL) << "failed to seek tmp_fd";
   }
 
-  ScopedMinijail jail{minijail_new()};
-  if (!jail) {
-    LOG(FATAL) << "failed to create minijail";
-  }
+  minijail_no_new_privs(jail);
+  minijail_log_seccomp_filter_failures(jail);
+  minijail_use_seccomp_filter(jail);
+  minijail_parse_seccomp_filters_from_fd(jail, tmp_fd.release());
+}
 
-  minijail_no_new_privs(jail.get());
-  minijail_log_seccomp_filter_failures(jail.get());
-  minijail_use_seccomp_filter(jail.get());
-  minijail_parse_seccomp_filters_from_fd(jail.get(), tmp_fd.release());
+static pid_t seccomp_fork_impl(void (*prejail)()) {
+  ScopedMinijail jail{minijail_new()};
+  setup_jail(jail.get());
 
   pid_t result = fork();
   if (result == -1) {
@@ -1403,7 +1583,7 @@ TEST_F(CrasherTest, seccomp_crash_oom) {
   // We can't actually generate a backtrace, just make sure that the process terminates.
 }
 
-__attribute__((noinline)) extern "C" bool raise_debugger_signal(DebuggerdDumpType dump_type) {
+__attribute__((__noinline__)) extern "C" bool raise_debugger_signal(DebuggerdDumpType dump_type) {
   siginfo_t siginfo;
   siginfo.si_code = SI_QUEUE;
   siginfo.si_pid = getpid();
@@ -1483,6 +1663,9 @@ TEST_F(CrasherTest, seccomp_tombstone_thread_abort) {
 
   std::string result;
   ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(
+      result,
+      R"(signal 6 \(SIGABRT\))");
   ASSERT_BACKTRACE_FRAME(result, "abort");
 }
 
@@ -1589,6 +1772,75 @@ TEST_F(CrasherTest, seccomp_crash_logcat) {
   AssertDeath(SIGABRT);
 }
 
+extern "C" void malloc_enable();
+extern "C" void malloc_disable();
+
+TEST_F(CrasherTest, seccomp_tombstone_no_allocation) {
+  int intercept_result;
+  unique_fd output_fd;
+
+  static const auto dump_type = kDebuggerdTombstone;
+  StartProcess(
+      []() {
+        std::thread a(foo);
+        std::thread b(bar);
+
+        std::this_thread::sleep_for(100ms);
+
+        // Disable allocations to verify that nothing in the fallback
+        // signal handler does an allocation.
+        malloc_disable();
+        raise_debugger_signal(dump_type);
+        _exit(0);
+      },
+      &seccomp_fork);
+
+  StartIntercept(&output_fd, dump_type);
+  FinishCrasher();
+  AssertDeath(0);
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_BACKTRACE_FRAME(result, "raise_debugger_signal");
+  ASSERT_BACKTRACE_FRAME(result, "foo");
+  ASSERT_BACKTRACE_FRAME(result, "bar");
+}
+
+TEST_F(CrasherTest, seccomp_backtrace_no_allocation) {
+  int intercept_result;
+  unique_fd output_fd;
+
+  static const auto dump_type = kDebuggerdNativeBacktrace;
+  StartProcess(
+      []() {
+        std::thread a(foo);
+        std::thread b(bar);
+
+        std::this_thread::sleep_for(100ms);
+
+        // Disable allocations to verify that nothing in the fallback
+        // signal handler does an allocation.
+        malloc_disable();
+        raise_debugger_signal(dump_type);
+        _exit(0);
+      },
+      &seccomp_fork);
+
+  StartIntercept(&output_fd, dump_type);
+  FinishCrasher();
+  AssertDeath(0);
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_BACKTRACE_FRAME(result, "raise_debugger_signal");
+  ASSERT_BACKTRACE_FRAME(result, "foo");
+  ASSERT_BACKTRACE_FRAME(result, "bar");
+}
+
 TEST_F(CrasherTest, competing_tracer) {
   int intercept_result;
   unique_fd output_fd;
@@ -1623,6 +1875,160 @@ TEST_F(CrasherTest, competing_tracer) {
 
   ASSERT_EQ(0, ptrace(PTRACE_DETACH, crasher_pid, 0, SIGABRT));
   AssertDeath(SIGABRT);
+}
+
+struct GwpAsanTestParameters {
+  size_t alloc_size;
+  bool free_before_access;
+  int access_offset;
+  std::string cause_needle;  // Needle to be found in the "Cause: [GWP-ASan]" line.
+};
+
+struct GwpAsanCrasherTest
+    : CrasherTest,
+      testing::WithParamInterface<
+          std::tuple<GwpAsanTestParameters, /* recoverable */ bool, /* seccomp */ bool>> {};
+
+GwpAsanTestParameters gwp_asan_tests[] = {
+    {/* alloc_size */ 7, /* free_before_access */ true, /* access_offset */ 0,
+     "Use After Free, 0 bytes into a 7-byte allocation"},
+    {/* alloc_size */ 15, /* free_before_access */ true, /* access_offset */ 1,
+     "Use After Free, 1 byte into a 15-byte allocation"},
+    {/* alloc_size */ static_cast<size_t>(getpagesize()), /* free_before_access */ false,
+     /* access_offset */ getpagesize() + 2,
+     android::base::StringPrintf("Buffer Overflow, 2 bytes right of a %d-byte allocation",
+                                 getpagesize())},
+    {/* alloc_size */ static_cast<size_t>(getpagesize()), /* free_before_access */ false,
+     /* access_offset */ -1,
+     android::base::StringPrintf("Buffer Underflow, 1 byte left of a %d-byte allocation",
+                                 getpagesize())},
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    GwpAsanTests, GwpAsanCrasherTest,
+    testing::Combine(testing::ValuesIn(gwp_asan_tests),
+                     /* recoverable */ testing::Bool(),
+                     /* seccomp */ testing::Bool()),
+    [](const testing::TestParamInfo<
+        std::tuple<GwpAsanTestParameters, /* recoverable */ bool, /* seccomp */ bool>>& info) {
+      const GwpAsanTestParameters& params = std::get<0>(info.param);
+      std::string name = params.free_before_access ? "UseAfterFree" : "Overflow";
+      name += testing::PrintToString(params.alloc_size);
+      name += "Alloc";
+      if (params.access_offset < 0) {
+        name += "Left";
+        name += testing::PrintToString(params.access_offset * -1);
+      } else {
+        name += "Right";
+        name += testing::PrintToString(params.access_offset);
+      }
+      name += "Bytes";
+      if (std::get<1>(info.param)) name += "Recoverable";
+      if (std::get<2>(info.param)) name += "Seccomp";
+      return name;
+    });
+
+TEST_P(GwpAsanCrasherTest, run_gwp_asan_test) {
+  if (mte_supported()) {
+    // Skip this test on MTE hardware, as MTE will reliably catch these errors
+    // instead of GWP-ASan.
+    GTEST_SKIP() << "Skipped on MTE.";
+  }
+  // Skip this test on HWASan, which will reliably catch test errors as well.
+  SKIP_WITH_HWASAN;
+
+  GwpAsanTestParameters params = std::get<0>(GetParam());
+  bool recoverable = std::get<1>(GetParam());
+  LogcatCollector logcat_collector;
+
+  int intercept_result;
+  unique_fd output_fd;
+  StartProcess([&recoverable]() {
+    const char* env[] = {"GWP_ASAN_SAMPLE_RATE=1", "GWP_ASAN_PROCESS_SAMPLING=1",
+                         "GWP_ASAN_MAX_ALLOCS=40000", nullptr, nullptr};
+    if (!recoverable) {
+      env[3] = "GWP_ASAN_RECOVERABLE=false";
+    }
+    std::string test_name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+    test_name = std::regex_replace(test_name, std::regex("run_gwp_asan_test"),
+                                   "DISABLED_run_gwp_asan_test");
+    std::string test_filter = "--gtest_filter=*";
+    test_filter += test_name;
+    std::string this_binary = android::base::GetExecutablePath();
+    const char* args[] = {this_binary.c_str(), "--gtest_also_run_disabled_tests",
+                          test_filter.c_str(), nullptr};
+    // We check the crash report from a debuggerd handler and from logcat. The
+    // echo from stdout/stderr of the subprocess trips up atest, because it
+    // doesn't like that two tests started in a row without the first one
+    // finishing (even though the second one is in a subprocess).
+    close(STDOUT_FILENO);
+    close(STDERR_FILENO);
+    execve(this_binary.c_str(), const_cast<char**>(args), const_cast<char**>(env));
+  });
+
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  if (recoverable) {
+    AssertDeath(0);
+  } else {
+    AssertDeath(SIGSEGV);
+  }
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::vector<std::string> log_sources(2);
+  ConsumeFd(std::move(output_fd), &log_sources[0]);
+  logcat_collector.Collect(&log_sources[1]);
+
+  // seccomp forces the fallback handler, which doesn't print GWP-ASan debugging
+  // information. Make sure the recovery still works, but the report won't be
+  // hugely useful, it looks like a regular SEGV.
+  bool seccomp = std::get<2>(GetParam());
+  if (!seccomp) {
+    for (const auto& result : log_sources) {
+      ASSERT_MATCH(result, R"(signal 11 \(SIGSEGV\), code 2 \(SEGV_ACCERR\))");
+      ASSERT_MATCH(result, R"(Cause: \[GWP-ASan\]: )" + params.cause_needle);
+      if (params.free_before_access) {
+        ASSERT_MATCH(result, R"(deallocated by thread .*\n.*#00 pc)");
+      }
+      ASSERT_MATCH(result, R"((^|\s)allocated by thread .*\n.*#00 pc)");
+    }
+  }
+}
+
+TEST_P(GwpAsanCrasherTest, DISABLED_run_gwp_asan_test) {
+  GwpAsanTestParameters params = std::get<0>(GetParam());
+  bool seccomp = std::get<2>(GetParam());
+  if (seccomp) {
+    ScopedMinijail jail{minijail_new()};
+    setup_jail(jail.get());
+    minijail_enter(jail.get());
+  }
+
+  // Use 'volatile' to prevent a very clever compiler eliminating the store.
+  char* volatile p = reinterpret_cast<char* volatile>(malloc(params.alloc_size));
+  if (params.free_before_access) free(static_cast<void*>(const_cast<char*>(p)));
+  p[params.access_offset] = 42;
+  if (!params.free_before_access) free(static_cast<void*>(const_cast<char*>(p)));
+
+  bool recoverable = std::get<1>(GetParam());
+  ASSERT_TRUE(recoverable);  // Non-recoverable should have crashed.
+
+  // As we're in recoverable mode, trigger another 2x use-after-frees (ensuring
+  // we end with at least one in a different slot), make sure the process still
+  // doesn't crash.
+  p = reinterpret_cast<char* volatile>(malloc(params.alloc_size));
+  char* volatile p2 = reinterpret_cast<char* volatile>(malloc(params.alloc_size));
+  free(static_cast<void*>(const_cast<char*>(p)));
+  free(static_cast<void*>(const_cast<char*>(p2)));
+  *p = 42;
+  *p2 = 42;
+
+  // Under clang coverage (which is a default TEST_MAPPING presubmit target), the
+  // recoverable+seccomp tests fail because the minijail prevents some atexit syscalls that clang
+  // coverage does. Thus, skip the atexit handlers.
+  _exit(0);
 }
 
 TEST_F(CrasherTest, fdsan_warning_abort_message) {
@@ -1685,9 +2091,10 @@ TEST(tombstoned, no_notify) {
     pid_t pid = 123'456'789 + i;
 
     unique_fd intercept_fd, output_fd;
-    InterceptStatus status;
-    tombstoned_intercept(pid, &intercept_fd, &output_fd, &status, kDebuggerdTombstone);
-    ASSERT_EQ(InterceptStatus::kRegistered, status);
+    InterceptResponse response = {};
+    tombstoned_intercept(pid, &intercept_fd, &output_fd, &response, kDebuggerdTombstone);
+    ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+        << "Error message: " << response.error_message;
 
     {
       unique_fd tombstoned_socket, input_fd;
@@ -1719,9 +2126,10 @@ TEST(tombstoned, stress) {
       pid_t pid = pid_base + dump;
 
       unique_fd intercept_fd, output_fd;
-      InterceptStatus status;
-      tombstoned_intercept(pid, &intercept_fd, &output_fd, &status, kDebuggerdTombstone);
-      ASSERT_EQ(InterceptStatus::kRegistered, status);
+      InterceptResponse response = {};
+      tombstoned_intercept(pid, &intercept_fd, &output_fd, &response, kDebuggerdTombstone);
+      ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+          << "Error messeage: " << response.error_message;
 
       // Pretend to crash, and then immediately close the socket.
       unique_fd sockfd(socket_local_client(kTombstonedCrashSocketName,
@@ -1752,9 +2160,10 @@ TEST(tombstoned, stress) {
       pid_t pid = pid_base + dump;
 
       unique_fd intercept_fd, output_fd;
-      InterceptStatus status;
-      tombstoned_intercept(pid, &intercept_fd, &output_fd, &status, kDebuggerdTombstone);
-      ASSERT_EQ(InterceptStatus::kRegistered, status);
+      InterceptResponse response = {};
+      tombstoned_intercept(pid, &intercept_fd, &output_fd, &response, kDebuggerdTombstone);
+      ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+          << "Error message: " << response.error_message;
 
       {
         unique_fd tombstoned_socket, input_fd;
@@ -1779,16 +2188,17 @@ TEST(tombstoned, stress) {
   }
 }
 
-TEST(tombstoned, java_trace_intercept_smoke) {
+TEST(tombstoned, intercept_java_trace_smoke) {
   // Using a "real" PID is a little dangerous here - if the test fails
   // or crashes, we might end up getting a bogus / unreliable stack
   // trace.
   const pid_t self = getpid();
 
   unique_fd intercept_fd, output_fd;
-  InterceptStatus status;
-  tombstoned_intercept(self, &intercept_fd, &output_fd, &status, kDebuggerdJavaBacktrace);
-  ASSERT_EQ(InterceptStatus::kRegistered, status);
+  InterceptResponse response = {};
+  tombstoned_intercept(self, &intercept_fd, &output_fd, &response, kDebuggerdJavaBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
 
   // First connect to tombstoned requesting a native tombstone. This
   // should result in a "regular" FD and not the installed intercept.
@@ -1810,25 +2220,96 @@ TEST(tombstoned, java_trace_intercept_smoke) {
   ASSERT_STREQ("java", outbuf);
 }
 
-TEST(tombstoned, multiple_intercepts) {
+TEST(tombstoned, intercept_multiple_dump_types) {
   const pid_t fake_pid = 1'234'567;
   unique_fd intercept_fd, output_fd;
-  InterceptStatus status;
-  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &status, kDebuggerdJavaBacktrace);
-  ASSERT_EQ(InterceptStatus::kRegistered, status);
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdJavaBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
 
   unique_fd intercept_fd_2, output_fd_2;
-  tombstoned_intercept(fake_pid, &intercept_fd_2, &output_fd_2, &status, kDebuggerdNativeBacktrace);
-  ASSERT_EQ(InterceptStatus::kFailedAlreadyRegistered, status);
+  tombstoned_intercept(fake_pid, &intercept_fd_2, &output_fd_2, &response,
+                       kDebuggerdNativeBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+}
+
+TEST(tombstoned, intercept_bad_pid) {
+  const pid_t fake_pid = -1;
+  unique_fd intercept_fd, output_fd;
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdNativeBacktrace);
+  ASSERT_EQ(InterceptStatus::kFailed, response.status)
+      << "Error message: " << response.error_message;
+  ASSERT_MATCH(response.error_message, "bad pid");
+}
+
+TEST(tombstoned, intercept_bad_dump_types) {
+  const pid_t fake_pid = 1'234'567;
+  unique_fd intercept_fd, output_fd;
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response,
+                       static_cast<DebuggerdDumpType>(20));
+  ASSERT_EQ(InterceptStatus::kFailed, response.status)
+      << "Error message: " << response.error_message;
+  ASSERT_MATCH(response.error_message, "bad dump type \\[unknown\\]");
+
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdAnyIntercept);
+  ASSERT_EQ(InterceptStatus::kFailed, response.status)
+      << "Error message: " << response.error_message;
+  ASSERT_MATCH(response.error_message, "bad dump type kDebuggerdAnyIntercept");
+
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdTombstoneProto);
+  ASSERT_EQ(InterceptStatus::kFailed, response.status)
+      << "Error message: " << response.error_message;
+  ASSERT_MATCH(response.error_message, "bad dump type kDebuggerdTombstoneProto");
+}
+
+TEST(tombstoned, intercept_already_registered) {
+  const pid_t fake_pid = 1'234'567;
+  unique_fd intercept_fd1, output_fd1;
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd1, &output_fd1, &response, kDebuggerdTombstone);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  unique_fd intercept_fd2, output_fd2;
+  tombstoned_intercept(fake_pid, &intercept_fd2, &output_fd2, &response, kDebuggerdTombstone);
+  ASSERT_EQ(InterceptStatus::kFailedAlreadyRegistered, response.status)
+      << "Error message: " << response.error_message;
+  ASSERT_MATCH(response.error_message, "already registered, type kDebuggerdTombstone");
+}
+
+TEST(tombstoned, intercept_tombstone_proto_matched_to_tombstone) {
+  const pid_t fake_pid = 1'234'567;
+
+  unique_fd intercept_fd, output_fd;
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdTombstone);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  const char data[] = "tombstone_proto";
+  unique_fd tombstoned_socket, input_fd;
+  ASSERT_TRUE(
+      tombstoned_connect(fake_pid, &tombstoned_socket, &input_fd, kDebuggerdTombstoneProto));
+  ASSERT_TRUE(android::base::WriteFully(input_fd.get(), data, sizeof(data)));
+  tombstoned_notify_completion(tombstoned_socket.get());
+
+  char outbuf[sizeof(data)];
+  ASSERT_TRUE(android::base::ReadFully(output_fd.get(), outbuf, sizeof(outbuf)));
+  ASSERT_STREQ("tombstone_proto", outbuf);
 }
 
 TEST(tombstoned, intercept_any) {
   const pid_t fake_pid = 1'234'567;
 
   unique_fd intercept_fd, output_fd;
-  InterceptStatus status;
-  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &status, kDebuggerdNativeBacktrace);
-  ASSERT_EQ(InterceptStatus::kRegistered, status);
+  InterceptResponse response = {};
+  tombstoned_intercept(fake_pid, &intercept_fd, &output_fd, &response, kDebuggerdNativeBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
 
   const char any[] = "any";
   unique_fd tombstoned_socket, input_fd;
@@ -1839,6 +2320,77 @@ TEST(tombstoned, intercept_any) {
   char outbuf[sizeof(any)];
   ASSERT_TRUE(android::base::ReadFully(output_fd.get(), outbuf, sizeof(outbuf)));
   ASSERT_STREQ("any", outbuf);
+}
+
+TEST(tombstoned, intercept_any_failed_with_multiple_intercepts) {
+  const pid_t fake_pid = 1'234'567;
+
+  InterceptResponse response = {};
+  unique_fd intercept_fd1, output_fd1;
+  tombstoned_intercept(fake_pid, &intercept_fd1, &output_fd1, &response, kDebuggerdNativeBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  unique_fd intercept_fd2, output_fd2;
+  tombstoned_intercept(fake_pid, &intercept_fd2, &output_fd2, &response, kDebuggerdJavaBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  unique_fd tombstoned_socket, input_fd;
+  ASSERT_FALSE(tombstoned_connect(fake_pid, &tombstoned_socket, &input_fd, kDebuggerdAnyIntercept));
+}
+
+TEST(tombstoned, intercept_multiple_verify_intercept) {
+  // Need to use our pid for java since that will verify the pid.
+  const pid_t fake_pid = getpid();
+
+  InterceptResponse response = {};
+  unique_fd intercept_fd1, output_fd1;
+  tombstoned_intercept(fake_pid, &intercept_fd1, &output_fd1, &response, kDebuggerdNativeBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  unique_fd intercept_fd2, output_fd2;
+  tombstoned_intercept(fake_pid, &intercept_fd2, &output_fd2, &response, kDebuggerdJavaBacktrace);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  unique_fd intercept_fd3, output_fd3;
+  tombstoned_intercept(fake_pid, &intercept_fd3, &output_fd3, &response, kDebuggerdTombstone);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
+
+  const char native_data[] = "native";
+  unique_fd tombstoned_socket1, input_fd1;
+  ASSERT_TRUE(
+      tombstoned_connect(fake_pid, &tombstoned_socket1, &input_fd1, kDebuggerdNativeBacktrace));
+  ASSERT_TRUE(android::base::WriteFully(input_fd1.get(), native_data, sizeof(native_data)));
+  tombstoned_notify_completion(tombstoned_socket1.get());
+
+  char native_outbuf[sizeof(native_data)];
+  ASSERT_TRUE(android::base::ReadFully(output_fd1.get(), native_outbuf, sizeof(native_outbuf)));
+  ASSERT_STREQ("native", native_outbuf);
+
+  const char java_data[] = "java";
+  unique_fd tombstoned_socket2, input_fd2;
+  ASSERT_TRUE(
+      tombstoned_connect(fake_pid, &tombstoned_socket2, &input_fd2, kDebuggerdJavaBacktrace));
+  ASSERT_TRUE(android::base::WriteFully(input_fd2.get(), java_data, sizeof(java_data)));
+  tombstoned_notify_completion(tombstoned_socket2.get());
+
+  char java_outbuf[sizeof(java_data)];
+  ASSERT_TRUE(android::base::ReadFully(output_fd2.get(), java_outbuf, sizeof(java_outbuf)));
+  ASSERT_STREQ("java", java_outbuf);
+
+  const char tomb_data[] = "tombstone";
+  unique_fd tombstoned_socket3, input_fd3;
+  ASSERT_TRUE(tombstoned_connect(fake_pid, &tombstoned_socket3, &input_fd3, kDebuggerdTombstone));
+  ASSERT_TRUE(android::base::WriteFully(input_fd3.get(), tomb_data, sizeof(tomb_data)));
+  tombstoned_notify_completion(tombstoned_socket3.get());
+
+  char tomb_outbuf[sizeof(tomb_data)];
+  ASSERT_TRUE(android::base::ReadFully(output_fd3.get(), tomb_outbuf, sizeof(tomb_outbuf)));
+  ASSERT_STREQ("tombstone", tomb_outbuf);
 }
 
 TEST(tombstoned, interceptless_backtrace) {
@@ -1907,7 +2459,7 @@ TEST_F(CrasherTest, stack_overflow) {
   ASSERT_MATCH(result, R"(Cause: stack pointer[^\n]*stack overflow.\n)");
 }
 
-static bool CopySharedLibrary(const char* tmp_dir, std::string* tmp_so_name) {
+static std::string GetTestLibraryPath() {
   std::string test_lib(testing::internal::GetArgvs()[0]);
   auto const value = test_lib.find_last_of('/');
   if (value == std::string::npos) {
@@ -1915,7 +2467,62 @@ static bool CopySharedLibrary(const char* tmp_dir, std::string* tmp_so_name) {
   } else {
     test_lib = test_lib.substr(0, value + 1) + "./";
   }
-  test_lib += "libcrash_test.so";
+  return test_lib + "libcrash_test.so";
+}
+
+static void CreateEmbeddedLibrary(int out_fd) {
+  std::string test_lib(GetTestLibraryPath());
+  android::base::unique_fd fd(open(test_lib.c_str(), O_RDONLY | O_CLOEXEC));
+  ASSERT_NE(fd.get(), -1);
+  off_t file_size = lseek(fd, 0, SEEK_END);
+  ASSERT_EQ(lseek(fd, 0, SEEK_SET), 0);
+  std::vector<uint8_t> contents(file_size);
+  ASSERT_TRUE(android::base::ReadFully(fd, contents.data(), contents.size()));
+
+  // Put the shared library data at a pagesize() offset.
+  ASSERT_EQ(lseek(out_fd, 4 * getpagesize(), SEEK_CUR), 4 * getpagesize());
+  ASSERT_EQ(static_cast<size_t>(write(out_fd, contents.data(), contents.size())), contents.size());
+}
+
+TEST_F(CrasherTest, non_zero_offset_in_library) {
+  int intercept_result;
+  unique_fd output_fd;
+  TemporaryFile tf;
+  CreateEmbeddedLibrary(tf.fd);
+  StartProcess([&tf]() {
+    android_dlextinfo extinfo{};
+    extinfo.flags = ANDROID_DLEXT_USE_LIBRARY_FD | ANDROID_DLEXT_USE_LIBRARY_FD_OFFSET;
+    extinfo.library_fd = tf.fd;
+    extinfo.library_fd_offset = 4 * getpagesize();
+    void* handle = android_dlopen_ext(tf.path, RTLD_NOW, &extinfo);
+    if (handle == nullptr) {
+      _exit(1);
+    }
+    void (*crash_func)() = reinterpret_cast<void (*)()>(dlsym(handle, "crash"));
+    if (crash_func == nullptr) {
+      _exit(1);
+    }
+    crash_func();
+  });
+
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGSEGV);
+  FinishIntercept(&intercept_result);
+
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+
+  // Verify the crash includes an offset value in the backtrace.
+  std::string match_str = android::base::StringPrintf("%s\\!libcrash_test.so \\(offset 0x%x\\)",
+                                                      tf.path, 4 * getpagesize());
+  ASSERT_MATCH(result, match_str);
+}
+
+static bool CopySharedLibrary(const char* tmp_dir, std::string* tmp_so_name) {
+  std::string test_lib(GetTestLibraryPath());
 
   *tmp_so_name = std::string(tmp_dir) + "/libcrash_test.so";
   std::string cp_cmd = android::base::StringPrintf("cp %s %s", test_lib.c_str(), tmp_dir);
@@ -1963,28 +2570,10 @@ TEST_F(CrasherTest, unreadable_elf) {
   ASSERT_MATCH(result, match_str);
 }
 
-TEST(tombstoned, proto) {
-  const pid_t self = getpid();
-  unique_fd tombstoned_socket, text_fd, proto_fd;
-  ASSERT_TRUE(
-      tombstoned_connect(self, &tombstoned_socket, &text_fd, &proto_fd, kDebuggerdTombstoneProto));
-
-  tombstoned_notify_completion(tombstoned_socket.get());
-
-  ASSERT_NE(-1, text_fd.get());
-  ASSERT_NE(-1, proto_fd.get());
-
-  struct stat text_st;
-  ASSERT_EQ(0, fstat(text_fd.get(), &text_st));
-
-  // Give tombstoned some time to link the files into place.
-  std::this_thread::sleep_for(100ms);
-
-  // Find the tombstone.
-  std::optional<std::string> tombstone_file;
+void CheckForTombstone(const struct stat& text_st, std::optional<std::string>& tombstone_file) {
+  static std::regex tombstone_re("tombstone_\\d+");
   std::unique_ptr<DIR, decltype(&closedir)> dir_h(opendir("/data/tombstones"), closedir);
   ASSERT_TRUE(dir_h != nullptr);
-  std::regex tombstone_re("tombstone_\\d+");
   dirent* entry;
   while ((entry = readdir(dir_h.get())) != nullptr) {
     if (!std::regex_match(entry->d_name, tombstone_re)) {
@@ -2002,8 +2591,38 @@ TEST(tombstoned, proto) {
       break;
     }
   }
+}
 
-  ASSERT_TRUE(tombstone_file);
+TEST(tombstoned, proto) {
+  const pid_t self = getpid();
+  unique_fd tombstoned_socket, text_fd, proto_fd;
+  ASSERT_TRUE(
+      tombstoned_connect(self, &tombstoned_socket, &text_fd, &proto_fd, kDebuggerdTombstoneProto));
+
+  tombstoned_notify_completion(tombstoned_socket.get());
+
+  ASSERT_NE(-1, text_fd.get());
+  ASSERT_NE(-1, proto_fd.get());
+
+  struct stat text_st;
+  ASSERT_EQ(0, fstat(text_fd.get(), &text_st));
+
+  std::optional<std::string> tombstone_file;
+  // Allow up to 5 seconds for the tombstone to be written to the system.
+  const auto max_wait_time = std::chrono::seconds(5) * android::base::HwTimeoutMultiplier();
+  const auto start = std::chrono::high_resolution_clock::now();
+  while (true) {
+    std::this_thread::sleep_for(100ms);
+    CheckForTombstone(text_st, tombstone_file);
+    if (tombstone_file) {
+      break;
+    }
+    if (std::chrono::high_resolution_clock::now() - start > max_wait_time) {
+      break;
+    }
+  }
+
+  ASSERT_TRUE(tombstone_file) << "Timed out trying to find tombstone file.";
   std::string proto_path = tombstone_file.value() + ".pb";
 
   struct stat proto_fd_st;
@@ -2018,10 +2637,11 @@ TEST(tombstoned, proto) {
 TEST(tombstoned, proto_intercept) {
   const pid_t self = getpid();
   unique_fd intercept_fd, output_fd;
-  InterceptStatus status;
 
-  tombstoned_intercept(self, &intercept_fd, &output_fd, &status, kDebuggerdTombstone);
-  ASSERT_EQ(InterceptStatus::kRegistered, status);
+  InterceptResponse response = {};
+  tombstoned_intercept(self, &intercept_fd, &output_fd, &response, kDebuggerdTombstone);
+  ASSERT_EQ(InterceptStatus::kRegistered, response.status)
+      << "Error message: " << response.error_message;
 
   unique_fd tombstoned_socket, text_fd, proto_fd;
   ASSERT_TRUE(
@@ -2148,12 +2768,16 @@ TEST_F(CrasherTest, fault_address_after_last_map) {
   match_str += format_full_pointer(crash_uptr);
   ASSERT_MATCH(result, match_str);
 
-  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->)\n)");
+  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->\)\n)");
 
-  // Assumes that the open files section comes after the map section.
-  // If that assumption changes, the regex below needs to change.
+  // Verifies that the fault address error message is at the end of the
+  // maps section. To do this, the check below looks for the start of the
+  // open files section or the start of the log file section. It's possible
+  // for either of these sections to be present after the maps section right
+  // now.
+  // If the sections move around, this check might need to be modified.
   match_str = android::base::StringPrintf(
-      R"(\n--->Fault address falls at %s after any mapped regions\n\nopen files:)",
+      R"(\n--->Fault address falls at %s after any mapped regions\n(---------|\nopen files:))",
       format_pointer(crash_uptr).c_str());
   ASSERT_MATCH(result, match_str);
 }
@@ -2196,7 +2820,7 @@ TEST_F(CrasherTest, fault_address_between_maps) {
   match_str += format_full_pointer(reinterpret_cast<uintptr_t>(middle_ptr));
   ASSERT_MATCH(result, match_str);
 
-  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->)\n)");
+  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->\)\n)");
 
   match_str = android::base::StringPrintf(
       R"(    %s.*\n--->Fault address falls at %s between mapped regions\n    %s)",
@@ -2234,7 +2858,7 @@ TEST_F(CrasherTest, fault_address_in_map) {
   match_str += format_full_pointer(reinterpret_cast<uintptr_t>(ptr));
   ASSERT_MATCH(result, match_str);
 
-  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->)\n)");
+  ASSERT_MATCH(result, R"(\nmemory map \(.*\): \(fault address prefixed with --->\)\n)");
 
   match_str = android::base::StringPrintf(R"(\n--->%s.*\n)", format_pointer(ptr).c_str());
   ASSERT_MATCH(result, match_str);
@@ -2307,35 +2931,42 @@ TEST_F(CrasherTest, verify_dex_pc_with_function_name) {
 #if defined(__arm__)
     asm volatile(
         "mov r1, %[base]\n"
-        "mov r2, 0\n"
-        "str r3, [r2]\n"
+        "mov r2, #0\n"
+        "str r2, [r2]\n"
         : [base] "+r"(ptr)
         :
-        : "r1", "r2", "r3", "memory");
+        : "r1", "r2", "memory");
 #elif defined(__aarch64__)
     asm volatile(
         "mov x1, %[base]\n"
-        "mov x2, 0\n"
-        "str x3, [x2]\n"
+        "mov x2, #0\n"
+        "str xzr, [x2]\n"
         : [base] "+r"(ptr)
         :
-        : "x1", "x2", "x3", "memory");
+        : "x1", "x2", "memory");
+#elif defined(__riscv)
+    // TODO: x1 is ra (the link register) on riscv64, so this might have
+    // unintended consequences, but we'll need to change the .cfi_escape if so.
+    asm volatile(
+        "mv x1, %[base]\n"
+        "sw zero, 0(zero)\n"
+        : [base] "+r"(ptr)
+        :
+        : "x1", "memory");
 #elif defined(__i386__)
     asm volatile(
         "mov %[base], %%ecx\n"
-        "movl $0, %%edi\n"
-        "movl 0(%%edi), %%edx\n"
+        "movl $0, 0\n"
         : [base] "+r"(ptr)
         :
-        : "edi", "ecx", "edx", "memory");
+        : "ecx", "memory");
 #elif defined(__x86_64__)
     asm volatile(
         "mov %[base], %%rdx\n"
-        "movq 0, %%rdi\n"
-        "movq 0(%%rdi), %%rcx\n"
+        "movq $0, 0\n"
         : [base] "+r"(ptr)
         :
-        : "rcx", "rdx", "rdi", "memory");
+        : "rdx", "memory");
 #else
 #error "Unsupported architecture"
 #endif
@@ -2415,30 +3046,34 @@ TEST_F(CrasherTest, verify_map_format) {
   std::string match_str;
   // Verify none.
   match_str = android::base::StringPrintf(
-      "    %s-%s ---         0      1000\\n",
+      "    %s-%s ---         0      %x\\n",
       format_map_pointer(reinterpret_cast<uintptr_t>(none_map)).c_str(),
-      format_map_pointer(reinterpret_cast<uintptr_t>(none_map) + getpagesize() - 1).c_str());
+      format_map_pointer(reinterpret_cast<uintptr_t>(none_map) + getpagesize() - 1).c_str(),
+      getpagesize());
   ASSERT_MATCH(result, match_str);
 
   // Verify read-only.
   match_str = android::base::StringPrintf(
-      "    %s-%s r--         0      1000\\n",
+      "    %s-%s r--         0      %x\\n",
       format_map_pointer(reinterpret_cast<uintptr_t>(r_map)).c_str(),
-      format_map_pointer(reinterpret_cast<uintptr_t>(r_map) + getpagesize() - 1).c_str());
+      format_map_pointer(reinterpret_cast<uintptr_t>(r_map) + getpagesize() - 1).c_str(),
+      getpagesize());
   ASSERT_MATCH(result, match_str);
 
   // Verify write-only.
   match_str = android::base::StringPrintf(
-      "    %s-%s -w-         0      1000\\n",
+      "    %s-%s -w-         0      %x\\n",
       format_map_pointer(reinterpret_cast<uintptr_t>(w_map)).c_str(),
-      format_map_pointer(reinterpret_cast<uintptr_t>(w_map) + getpagesize() - 1).c_str());
+      format_map_pointer(reinterpret_cast<uintptr_t>(w_map) + getpagesize() - 1).c_str(),
+      getpagesize());
   ASSERT_MATCH(result, match_str);
 
   // Verify exec-only.
   match_str = android::base::StringPrintf(
-      "    %s-%s --x         0      1000\\n",
+      "    %s-%s --x         0      %x\\n",
       format_map_pointer(reinterpret_cast<uintptr_t>(x_map)).c_str(),
-      format_map_pointer(reinterpret_cast<uintptr_t>(x_map) + getpagesize() - 1).c_str());
+      format_map_pointer(reinterpret_cast<uintptr_t>(x_map) + getpagesize() - 1).c_str(),
+      getpagesize());
   ASSERT_MATCH(result, match_str);
 
   // Verify file map with non-zero offset and a name.
@@ -2555,7 +3190,8 @@ TEST_F(CrasherTest, verify_build_id) {
     }
 
     prev_file = match[1];
-    unwindstack::Elf elf(unwindstack::Memory::CreateFileMemory(prev_file, 0).release());
+    auto elf_memory = unwindstack::Memory::CreateFileMemory(prev_file, 0);
+    unwindstack::Elf elf(elf_memory);
     if (!elf.Init() || !elf.valid()) {
       // Skipping invalid elf files.
       continue;
@@ -2565,4 +3201,190 @@ TEST_F(CrasherTest, verify_build_id) {
     found_valid_elf = true;
   }
   ASSERT_TRUE(found_valid_elf) << "Did not find any elf files with valid BuildIDs to check.";
+}
+
+const char kLogMessage[] = "Should not see this log message.";
+
+// Verify that the logd process does not read the log.
+TEST_F(CrasherTest, logd_skips_reading_logs) {
+  StartProcess([]() {
+    pthread_setname_np(pthread_self(), "logd");
+    LOG(INFO) << kLogMessage;
+    abort();
+  });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  // logd should not contain our log message.
+  ASSERT_NOT_MATCH(result, kLogMessage);
+}
+
+// Verify that the logd process does not read the log when the non-main
+// thread crashes.
+TEST_F(CrasherTest, logd_skips_reading_logs_not_main_thread) {
+  StartProcess([]() {
+    pthread_setname_np(pthread_self(), "logd");
+    LOG(INFO) << kLogMessage;
+
+    std::thread thread([]() {
+      pthread_setname_np(pthread_self(), "not_logd_thread");
+      // Raise the signal on the side thread.
+      raise_debugger_signal(kDebuggerdTombstone);
+    });
+    thread.join();
+    _exit(0);
+  });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd, kDebuggerdTombstone);
+  FinishCrasher();
+  AssertDeath(0);
+
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_BACKTRACE_FRAME(result, "raise_debugger_signal");
+  ASSERT_NOT_MATCH(result, kLogMessage);
+}
+
+// Disable this test since there is a high liklihood that this would
+// be flaky since it requires 500 messages being in the log.
+TEST_F(CrasherTest, DISABLED_max_log_messages) {
+  StartProcess([]() {
+    for (size_t i = 0; i < 600; i++) {
+      LOG(INFO) << "Message number " << i;
+    }
+    abort();
+  });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_NOT_MATCH(result, "Message number 99");
+  ASSERT_MATCH(result, "Message number 100");
+  ASSERT_MATCH(result, "Message number 599");
+}
+
+TEST_F(CrasherTest, log_with_newline) {
+  StartProcess([]() {
+    LOG(INFO) << "This line has a newline.\nThis is on the next line.";
+    abort();
+  });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  ASSERT_MATCH(result, ":\\s*This line has a newline.");
+  ASSERT_MATCH(result, ":\\s*This is on the next line.");
+}
+
+TEST_F(CrasherTest, log_with_non_printable_ascii_verify_encoded) {
+  static const std::string kEncodedStr =
+      "\x5C\x31"
+      "\x5C\x32"
+      "\x5C\x33"
+      "\x5C\x34"
+      "\x5C\x35"
+      "\x5C\x36"
+      "\x5C\x37"
+      "\x5C\x31\x30"
+      "\x5C\x31\x36"
+      "\x5C\x31\x37"
+      "\x5C\x32\x30"
+      "\x5C\x32\x31"
+      "\x5C\x32\x32"
+      "\x5C\x32\x33"
+      "\x5C\x32\x34"
+      "\x5C\x32\x35"
+      "\x5C\x32\x36"
+      "\x5C\x32\x37"
+      "\x5C\x33\x30"
+      "\x5C\x33\x31"
+      "\x5C\x33\x32"
+      "\x5C\x33\x33"
+      "\x5C\x33\x34"
+      "\x5C\x33\x35"
+      "\x5C\x33\x36"
+      "\x5C\x33\x37"
+      "\x5C\x31\x37\x37"
+      "\x5C\x32\x34\x30"
+      "\x5C\x32\x36\x30"
+      "\x5C\x33\x30\x30"
+      "\x5C\x33\x32\x30";
+  StartProcess([]() {
+    LOG(FATAL) << "Encoded: "
+                  "\x1\x2\x3\x4\x5\x6\x7\x8\xe\xf\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b"
+                  "\x1c\x1d\x1e\x1f\x7f\xA0\xB0\xC0\xD0 after";
+  });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  // Verify the abort message is sanitized properly.
+  size_t pos = result.find(std::string("Abort message: 'Encoded: ") + kEncodedStr + " after'");
+  EXPECT_TRUE(pos != std::string::npos) << "Couldn't find sanitized abort message: " << result;
+
+  // Make sure that the log message is sanitized properly too.
+  EXPECT_TRUE(result.find(std::string("Encoded: ") + kEncodedStr + " after", pos + 1) !=
+              std::string::npos)
+      << "Couldn't find sanitized log message: " << result;
+}
+
+TEST_F(CrasherTest, log_with_with_special_printable_ascii) {
+  static const std::string kMsg = "Not encoded: \t\v\f\r\n after";
+  StartProcess([]() { LOG(FATAL) << kMsg; });
+
+  unique_fd output_fd;
+  StartIntercept(&output_fd);
+  FinishCrasher();
+  AssertDeath(SIGABRT);
+  int intercept_result;
+  FinishIntercept(&intercept_result);
+  ASSERT_EQ(1, intercept_result) << "tombstoned reported failure";
+
+  std::string result;
+  ConsumeFd(std::move(output_fd), &result);
+  // Verify the abort message does not remove characters that are UTF8 but
+  // are, technically, not printable.
+  size_t pos = result.find(std::string("Abort message: '") + kMsg + "'");
+  EXPECT_TRUE(pos != std::string::npos) << "Couldn't find abort message: " << result;
+
+  // Make sure that the log message is handled properly too.
+  // The logger automatically splits a newline message into two pieces.
+  pos = result.find("Not encoded: \t\v\f\r", pos + kMsg.size());
+  EXPECT_TRUE(pos != std::string::npos) << "Couldn't find log message: " << result;
+  EXPECT_TRUE(result.find(" after", pos + 1) != std::string::npos)
+      << "Couldn't find sanitized log message: " << result;
 }

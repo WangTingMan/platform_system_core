@@ -207,7 +207,7 @@ void Subcontext::Fork() {
 
         // We explicitly do not use O_CLOEXEC here, such that we can reference this FD by number
         // in the subcontext process after we exec.
-        int child_fd = dup(subcontext_socket);  // NOLINT(android-cloexec-dup)
+        int child_fd = dup(subcontext_socket.get());  // NOLINT(android-cloexec-dup)
         if (child_fd < 0) {
             PLOG(FATAL) << "Could not dup child_fd";
         }
@@ -263,17 +263,21 @@ bool Subcontext::PathMatchesSubcontext(const std::string& path) const {
     return false;
 }
 
+bool Subcontext::PartitionMatchesSubcontext(const std::string& partition) const {
+    return std::find(partitions_.begin(), partitions_.end(), partition) != partitions_.end();
+}
+
 void Subcontext::SetApexList(std::vector<std::string>&& apex_list) {
     apex_list_ = std::move(apex_list);
 }
 
 Result<SubcontextReply> Subcontext::TransmitMessage(const SubcontextCommand& subcontext_command) {
-    if (auto result = SendMessage(socket_, subcontext_command); !result.ok()) {
+    if (auto result = SendMessage(socket_.get(), subcontext_command); !result.ok()) {
         Restart();
         return ErrnoError() << "Failed to send message to subcontext";
     }
 
-    auto subcontext_message = ReadMessage(socket_);
+    auto subcontext_message = ReadMessage(socket_.get());
     if (!subcontext_message.ok()) {
         Restart();
         return Error() << "Failed to receive result from subcontext: " << subcontext_message.error();
@@ -352,12 +356,13 @@ void InitializeSubcontext() {
     }
 
     if (SelinuxGetVendorAndroidVersion() >= __ANDROID_API_P__) {
-        subcontext.reset(
-                new Subcontext(std::vector<std::string>{"/vendor", "/odm"}, kVendorContext));
+        subcontext.reset(new Subcontext(std::vector<std::string>{"/vendor", "/odm"},
+                                        std::vector<std::string>{"VENDOR", "ODM"}, kVendorContext));
     }
 }
+
 void InitializeHostSubcontext(std::vector<std::string> vendor_prefixes) {
-    subcontext.reset(new Subcontext(vendor_prefixes, kVendorContext, /*host=*/true));
+    subcontext.reset(new Subcontext(vendor_prefixes, {}, kVendorContext, /*host=*/true));
 }
 
 Subcontext* GetSubcontext() {

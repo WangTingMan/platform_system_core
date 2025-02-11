@@ -19,10 +19,13 @@
 #define NOMINMAX
 
 /*
- * Implementation of the user-space ashmem API for the simulator, which lacks
- * an ashmem-enabled kernel. See ashmem-dev.c for the real ashmem-based version.
+ * Implementation of the user-space ashmem API for the simulator, which lacks an
+ * ashmem-enabled kernel. See ashmem-dev.c for the real ashmem-based version.  A
+ * disk-backed temp file is the best option that is consistently supported
+ * across all host platforms.
  */
 
+#include <android-base/unique_fd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -32,6 +35,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+<<<<<<< HEAD
 #include <windows.h>
 
 #include <atomic>
@@ -44,12 +48,20 @@
 #include <base/rand_util.h>
 #include <base/strings/utf_string_conversions.h>
 #include <base/strings/stringprintf.h>
+=======
+#include <unistd.h>
+#include <utils/Compat.h>
+#include <memory>
+
+using android::base::unique_fd;
+>>>>>>> 64d68e1d6
 
 static bool ashmem_validate_stat(int fd, struct stat* buf) {
     int result = fstat(fd, buf);
     if (result == -1) {
         return false;
     }
+<<<<<<< HEAD
 #ifndef _MSC_VER
     /*
      * Check if this is an "ashmem" region.
@@ -60,6 +72,22 @@ static bool ashmem_validate_stat(int fd, struct stat* buf) {
         errno = ENOTTY;
         return false;
     }
+=======
+
+    // Check if this is an ashmem region. Since there's no such thing on the host,
+    // we can't actually implement that. Check that it's at least a regular file.
+    if (!S_ISREG(buf->st_mode)) {
+        errno = ENOTTY;
+        return false;
+    }
+    // In Win32, unlike Unix, the temp file is not unlinked immediately after
+    // creation.
+#if !defined(_WIN32)
+    if (buf->st_nlink != 0) {
+        errno = ENOTTY;
+        return false;
+    }
+>>>>>>> 64d68e1d6
 #endif
     return true;
 }
@@ -77,19 +105,23 @@ int ashmem_valid( ASHMEM_HANDLE fd) {
 #endif
 }
 
+<<<<<<< HEAD
 ASHMEM_HANDLE ashmem_create_region(const char* a_name, size_t size) {
 #ifndef _MSC_VER
     char pattern[PATH_MAX];
     snprintf(pattern, sizeof(pattern), "/tmp/android-ashmem-%d-XXXXXXXXX", getpid());
     int fd = mkstemp(pattern);
     if (fd == -1) return -1;
+=======
+int ashmem_create_region(const char* /*ignored*/, size_t size) {
+    // Files returned by tmpfile are automatically removed.
+    std::unique_ptr<FILE, decltype(&fclose)> tmp(tmpfile(), &fclose);
+>>>>>>> 64d68e1d6
 
-    unlink(pattern);
-
-    if (TEMP_FAILURE_RETRY(ftruncate(fd, size)) == -1) {
-      close(fd);
-      return -1;
+    if (!tmp) {
+        return -1;
     }
+<<<<<<< HEAD
     return fd;
 #else
     HANDLE sh_hdl = INVALID_HANDLE_VALUE;
@@ -134,6 +166,20 @@ ASHMEM_HANDLE ashmem_create_region(const char* a_name, size_t size) {
 
     return sh_hdl;
 #endif
+=======
+    int fd = fileno(tmp.get());
+    if (fd == -1) {
+        return -1;
+    }
+    unique_fd dupfd = unique_fd(dup(fd));
+    if (dupfd == -1) {
+        return -1;
+    }
+    if (TEMP_FAILURE_RETRY(ftruncate(dupfd, size)) == -1) {
+        return -1;
+    }
+    return dupfd.release();
+>>>>>>> 64d68e1d6
 }
 
 /**

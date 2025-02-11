@@ -15,23 +15,38 @@
  */
 
 #include <snapuserd/snapuserd_buffer.h>
+
+#include <android-base/logging.h>
 #include <snapuserd/snapuserd_kernel.h>
 
 namespace android {
 namespace snapshot {
 
-void BufferSink::Initialize(size_t size) {
-    buffer_size_ = size;
+void BufferSink::Initialize(size_t header_size, size_t size) {
+    header_size_ = header_size;
+    buffer_size_ = size + header_size;
     buffer_offset_ = 0;
-    buffer_ = std::make_unique<uint8_t[]>(size);
+    buffer_ = std::make_unique<uint8_t[]>(buffer_size_);
+}
+
+void* BufferSink::AcquireBuffer(size_t size, size_t to_write) {
+    CHECK(to_write <= size);
+
+    void* ptr = GetPayloadBuffer(size);
+    if (!ptr) {
+        return nullptr;
+    }
+    UpdateBufferOffset(to_write);
+    return ptr;
 }
 
 void* BufferSink::GetPayloadBuffer(size_t size) {
-    if ((buffer_size_ - buffer_offset_) < size) return nullptr;
-
     char* buffer = reinterpret_cast<char*>(GetBufPtr());
-    struct dm_user_message* msg = (struct dm_user_message*)(&(buffer[0]));
-    return (char*)msg->payload.buf + buffer_offset_;
+
+    if ((buffer_size_ - buffer_offset_ - header_size_) < size) {
+        return nullptr;
+    }
+    return (char*)(&buffer[0] + header_size_ + buffer_offset_);
 }
 
 void* BufferSink::GetBuffer(size_t requested, size_t* actual) {
@@ -44,52 +59,18 @@ void* BufferSink::GetBuffer(size_t requested, size_t* actual) {
     return buf;
 }
 
-struct dm_user_header* BufferSink::GetHeaderPtr() {
-    if (!(sizeof(struct dm_user_header) <= buffer_size_)) {
+void* BufferSink::GetHeaderPtr() {
+    // If no sufficient space or header not reserved
+    if (!(header_size_ <= buffer_size_) || !header_size_) {
         return nullptr;
     }
     char* buf = reinterpret_cast<char*>(GetBufPtr());
-    struct dm_user_header* header = (struct dm_user_header*)(&(buf[0]));
-    return header;
+    return (void*)(&(buf[0]));
 }
 
 void* BufferSink::GetPayloadBufPtr() {
     char* buffer = reinterpret_cast<char*>(GetBufPtr());
-    struct dm_user_message* msg = reinterpret_cast<struct dm_user_message*>(&(buffer[0]));
-    return msg->payload.buf;
-}
-
-void XorSink::Initialize(BufferSink* sink, size_t size) {
-    bufsink_ = sink;
-    buffer_size_ = size;
-    returned_ = 0;
-    buffer_ = std::make_unique<uint8_t[]>(size);
-}
-
-void XorSink::Reset() {
-    returned_ = 0;
-}
-
-void* XorSink::GetBuffer(size_t requested, size_t* actual) {
-    if (requested > buffer_size_) {
-        *actual = buffer_size_;
-    } else {
-        *actual = requested;
-    }
-    return buffer_.get();
-}
-
-bool XorSink::ReturnData(void* buffer, size_t len) {
-    uint8_t* xor_data = reinterpret_cast<uint8_t*>(buffer);
-    uint8_t* buff = reinterpret_cast<uint8_t*>(bufsink_->GetPayloadBuffer(len + returned_));
-    if (buff == nullptr) {
-        return false;
-    }
-    for (size_t i = 0; i < len; i++) {
-        buff[returned_ + i] ^= xor_data[i];
-    }
-    returned_ += len;
-    return true;
+    return &buffer[header_size_];
 }
 
 }  // namespace snapshot

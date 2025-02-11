@@ -29,11 +29,10 @@ cc_library_shared {
     ],
     shared_libs: [
         "libbase",
-        "libcgrouprc",
         "libjsoncpp",
     ],
     static_libs: [
-        "libcgrouprc_format",
+        "libprocessgroup_util",
     ],
     header_libs: [
         "libprocessgroup_headers",
@@ -41,8 +40,5 @@ cc_library_shared {
     export_header_lib_headers: [
         "libprocessgroup_headers",
     ],
-    cflags: [
-        "-Wall",
-        "-Werror",
-    ],
+    defaults: ["libprocessgroup_build_flags_cc"],
 }

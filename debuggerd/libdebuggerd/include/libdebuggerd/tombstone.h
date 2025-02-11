@@ -28,6 +28,7 @@
 #include <android-base/unique_fd.h>
 
 #include "open_files_list.h"
+#include "tombstone.pb.h"
 #include "types.h"
 
 // Forward declarations
@@ -54,20 +55,22 @@ void engrave_tombstone(android::base::unique_fd output_fd, android::base::unique
                        unwindstack::AndroidUnwinder* unwinder,
                        const std::map<pid_t, ThreadInfo>& thread_info, pid_t target_thread,
                        const ProcessInfo& process_info, OpenFilesList* open_files,
-                       std::string* amfd_data);
+                       std::string* amfd_data, const Architecture* guest_arch = nullptr,
+                       unwindstack::AndroidUnwinder* guest_unwinder = nullptr);
 
 void engrave_tombstone_ucontext(int tombstone_fd, int proto_fd, uint64_t abort_msg_address,
                                 siginfo_t* siginfo, ucontext_t* ucontext);
 
 void engrave_tombstone_proto(Tombstone* tombstone, unwindstack::AndroidUnwinder* unwinder,
                              const std::map<pid_t, ThreadInfo>& threads, pid_t target_thread,
-                             const ProcessInfo& process_info, const OpenFilesList* open_files);
-
-bool tombstone_proto_to_text(
-    const Tombstone& tombstone,
-    std::function<void(const std::string& line, bool should_log)> callback);
+                             const ProcessInfo& process_info, const OpenFilesList* open_files,
+                             const Architecture* guest_arch,
+                             unwindstack::AndroidUnwinder* guest_unwinder);
 
 void fill_in_backtrace_frame(BacktraceFrame* f, const unwindstack::FrameData& frame);
 void set_human_readable_cause(Cause* cause, uint64_t fault_addr);
-
+#if defined(__aarch64__)
+void dump_stack_history(unwindstack::AndroidUnwinder* unwinder, uintptr_t target_tls,
+                        StackHistoryBuffer& shb_ob, bool nounwind = false);
+#endif
 #endif  // _DEBUGGERD_TOMBSTONE_H

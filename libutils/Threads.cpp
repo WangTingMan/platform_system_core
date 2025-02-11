@@ -34,12 +34,7 @@
 #include <sys/prctl.h>
 #endif
 
-#include <utils/Log.h>
-
-#if defined(__ANDROID__)
-#include <processgroup/processgroup.h>
-#include <processgroup/sched_policy.h>
-#endif
+#include <log/log.h>
 
 #if defined(__ANDROID__)
 # define __android_unused
@@ -67,7 +62,7 @@ using namespace android;
  * We create it "detached", so it cleans up after itself.
  */
 
-typedef void* (*android_pthread_entry)(void*);
+typedef int (*android_pthread_entry)(void*);
 
 #if defined(__ANDROID__)
 struct thread_data_t {
@@ -94,6 +89,20 @@ struct thread_data_t {
     }
 };
 #endif
+
+// Adapted from bionic's implmenetation of trampoline to make C11 thrd_create
+// work with pthread_create.
+struct libutil_thread_data {
+  android_pthread_entry _Nonnull entry_func;
+  void* _Nullable entry_func_arg;
+};
+
+static void* _Nonnull libutil_thread_trampoline(void* _Nonnull arg) {
+  libutil_thread_data *data_ptr = static_cast<libutil_thread_data*>(arg);
+  int result = data_ptr->entry_func(data_ptr->entry_func_arg);
+  delete data_ptr;
+  return reinterpret_cast<void*>(static_cast<uintptr_t>(result));
+}
 
 void androidSetThreadName(const char* name) {
 #if defined(__linux__)
@@ -152,8 +161,13 @@ int androidCreateRawThreadEtc(android_thread_func_t entryFunction,
 
     errno = 0;
     pthread_t thread;
+
+    libutil_thread_data* pthread_arg = new libutil_thread_data;
+    pthread_arg->entry_func = entryFunction;
+    pthread_arg->entry_func_arg = userData;
+
     int result = pthread_create(&thread, &attr,
-                    (android_pthread_entry)entryFunction, userData);
+                    libutil_thread_trampoline, pthread_arg);
     pthread_attr_destroy(&attr);
     if (result != 0) {
         ALOGE("androidCreateRawThreadEtc failed (entry=%p, res=%d, %s)\n"
@@ -307,11 +321,6 @@ void androidSetCreateThreadFunc(android_create_thread_fn func)
 int androidSetThreadPriority(pid_t tid, int pri)
 {
     int rc = 0;
-    int curr_pri = getpriority(PRIO_PROCESS, tid);
-
-    if (curr_pri == pri) {
-        return rc;
-    }
 
     if (setpriority(PRIO_PROCESS, tid, pri) < 0) {
         rc = INVALID_OPERATION;
@@ -681,7 +690,7 @@ status_t Thread::run(const char* name, int32_t priority, size_t stack)
     mThread = thread_id_t(-1);
 
     // hold a strong reference on ourself
-    mHoldSelf = this;
+    mHoldSelf = sp<Thread>::fromExisting(this);
 
     mRunning = true;
 

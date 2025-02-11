@@ -8,10 +8,14 @@
 //#define LOG_NDEBUG 0
 
 // Debugs poll and wake interactions.
+#ifndef DEBUG_POLL_AND_WAKE
 #define DEBUG_POLL_AND_WAKE 0
+#endif
 
 // Debugs callback registration and invocation.
+#ifndef DEBUG_CALLBACKS
 #define DEBUG_CALLBACKS 0
+#endif
 
 #include <utils/Looper.h>
 
@@ -70,6 +74,7 @@ int SimpleLooperCallback::handleEvent(int fd, int events, void* data) {
 
 // Maximum number of file descriptors for which to retrieve poll events each iteration.
 static const int EPOLL_MAX_EVENTS = 16;
+<<<<<<< HEAD
 #ifndef _MSC_VER
 static pthread_once_t gTLSOnce = PTHREAD_ONCE_INIT;
 static pthread_key_t gTLSKey = 0;
@@ -77,6 +82,11 @@ static pthread_key_t gTLSKey = 0;
 static std::once_flag gTLSOnce;
 thread_local static std::shared_ptr<Looper> gTLSKey;
 #endif
+=======
+
+thread_local static sp<Looper> gThreadLocalLooper;
+
+>>>>>>> 64d68e1d6
 Looper::Looper(bool allowNonCallbacks)
     : mAllowNonCallbacks(allowNonCallbacks),
       mSendingMessage(false),
@@ -96,6 +106,7 @@ Looper::Looper(bool allowNonCallbacks)
 Looper::~Looper() {
 }
 
+<<<<<<< HEAD
 void Looper::initTLSKey() {
 #ifndef _MSC_VER
     int error = pthread_key_create(&gTLSKey, threadDestructor);
@@ -137,13 +148,21 @@ sp<Looper> Looper::getForThread() {
     std::call_once(gTLSOnce, initTLSKey);
     return gTLSKey.get();
 #endif
+=======
+void Looper::setForThread(const sp<Looper>& looper) {
+    gThreadLocalLooper = looper;
+}
+
+sp<Looper> Looper::getForThread() {
+    return gThreadLocalLooper;
+>>>>>>> 64d68e1d6
 }
 
 sp<Looper> Looper::prepare(int opts) {
     bool allowNonCallbacks = opts & PREPARE_ALLOW_NON_CALLBACKS;
     sp<Looper> looper = Looper::getForThread();
     if (looper == nullptr) {
-        looper = new Looper(allowNonCallbacks);
+        looper = sp<Looper>::make(allowNonCallbacks);
         Looper::setForThread(looper);
     }
     if (looper->getAllowNonCallbacks() != allowNonCallbacks) {
@@ -450,7 +469,11 @@ void Looper::awoken() {
 }
 
 int Looper::addFd(int fd, int ident, int events, Looper_callbackFunc callback, void* data) {
-    return addFd(fd, ident, events, callback ? new SimpleLooperCallback(callback) : nullptr, data);
+    sp<SimpleLooperCallback> looperCallback;
+    if (callback) {
+        looperCallback = sp<SimpleLooperCallback>::make(callback);
+    }
+    return addFd(fd, ident, events, looperCallback, data);
 }
 
 int Looper::addFd(int fd, int ident, int events, const sp<LooperCallback>& callback, void* data) {
@@ -541,6 +564,21 @@ int Looper::addFd(int fd, int ident, int events, const sp<LooperCallback>& callb
     return 1;
 }
 
+bool Looper::getFdStateDebug(int fd, int* ident, int* events, sp<LooperCallback>* cb, void** data) {
+    AutoMutex _l(mLock);
+    if (auto seqNumIt = mSequenceNumberByFd.find(fd); seqNumIt != mSequenceNumberByFd.cend()) {
+        if (auto reqIt = mRequests.find(seqNumIt->second); reqIt != mRequests.cend()) {
+            const Request& request = reqIt->second;
+            if (ident) *ident = request.ident;
+            if (events) *events = request.events;
+            if (cb) *cb = request.callback;
+            if (data) *data = request.data;
+            return true;
+        }
+    }
+    return false;
+}
+
 int Looper::removeFd(int fd) {
     AutoMutex _l(mLock);
     const auto& it = mSequenceNumberByFd.find(fd);
@@ -550,9 +588,33 @@ int Looper::removeFd(int fd) {
     return removeSequenceNumberLocked(it->second);
 }
 
+int Looper::repoll(int fd) {
+    AutoMutex _l(mLock);
+    const auto& it = mSequenceNumberByFd.find(fd);
+    if (it == mSequenceNumberByFd.end()) {
+        return 0;
+    }
+
+    const auto& request_it = mRequests.find(it->second);
+    if (request_it == mRequests.end()) {
+        return 0;
+    }
+    const auto& [seq, request] = *request_it;
+
+    LOG_ALWAYS_FATAL_IF(
+            fd != request.fd,
+            "Looper has inconsistent data structure. When looking up FD %d found FD %d.", fd,
+            request_it->second.fd);
+
+    epoll_event eventItem = createEpollEvent(request.getEpollEvents(), seq);
+    if (epoll_ctl(mEpollFd.get(), EPOLL_CTL_MOD, fd, &eventItem) == -1) return 0;
+
+    return 1;  // success
+}
+
 int Looper::removeSequenceNumberLocked(SequenceNumber seq) {
 #if DEBUG_CALLBACKS
-    ALOGD("%p ~ removeFd - fd=%d, seq=%u", this, fd, seq);
+    ALOGD("%p ~ removeFd - seq=%" PRIu64, this, seq);
 #endif
 
     const auto& request_it = mRequests.find(seq);

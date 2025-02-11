@@ -29,6 +29,9 @@ DEFINE_bool(socket_handoff, false,
             "If true, perform a socket hand-off with an existing snapuserd instance, then exit.");
 DEFINE_bool(user_snapshot, false, "If true, user-space snapshots are used");
 DEFINE_bool(io_uring, false, "If true, io_uring feature is enabled");
+DEFINE_bool(o_direct, false, "If true, enable direct reads on source device");
+DEFINE_int32(cow_op_merge_size, 0, "number of operations to be processed at once");
+DEFINE_int32(worker_count, 4, "number of worker threads used to serve I/O requests to dm-user");
 
 namespace android {
 namespace snapshot {
@@ -38,18 +41,18 @@ bool Daemon::IsUserspaceSnapshotsEnabled() {
     const std::string vendor_release =
             android::base::GetProperty("ro.vendor.build.version.release_or_codename", UNKNOWN);
 
-    // No user-space snapshots if vendor partition is on Android 12
+    // If the vendor is on Android S, install process will forcefully take the
+    // userspace snapshots path.
+    //
+    // We will not reach here post OTA reboot as the binary will be from vendor
+    // ramdisk which is on Android S.
     if (vendor_release.find("12") != std::string::npos) {
-        LOG(INFO) << "Userspace snapshots disabled as vendor partition is on Android: "
+        LOG(INFO) << "Userspace snapshots enabled as vendor partition is on Android: "
                   << vendor_release;
-        return false;
+        return true;
     }
 
     return android::base::GetBoolProperty("ro.virtual_ab.userspace.snapshots.enabled", false);
-}
-
-bool Daemon::IsDmSnapshotTestingEnabled() {
-    return android::base::GetBoolProperty("snapuserd.test.dm.snapshots", false);
 }
 
 bool Daemon::StartDaemon(int argc, char** argv) {
@@ -65,16 +68,15 @@ bool Daemon::StartDaemon(int argc, char** argv) {
     // stage init and hence use the command line flags to get the information.
     bool user_snapshots = FLAGS_user_snapshot;
     if (!user_snapshots) {
-        user_snapshots = (!IsDmSnapshotTestingEnabled() && IsUserspaceSnapshotsEnabled());
+        user_snapshots = IsUserspaceSnapshotsEnabled();
     }
-
     if (user_snapshots) {
         LOG(INFO) << "Starting daemon for user-space snapshots.....";
         return StartServerForUserspaceSnapshots(arg_start, argc, argv);
     } else {
-        LOG(INFO) << "Starting daemon for dm-snapshots.....";
-        return StartServerForDmSnapshot(arg_start, argc, argv);
+        LOG(ERROR) << "Userspace snapshots not enabled. No support for legacy snapshots";
     }
+    return false;
 }
 
 bool Daemon::StartServerForUserspaceSnapshots(int arg_start, int argc, char** argv) {
@@ -106,64 +108,30 @@ bool Daemon::StartServerForUserspaceSnapshots(int arg_start, int argc, char** ar
         }
         return user_server_.Run();
     }
-
     for (int i = arg_start; i < argc; i++) {
         auto parts = android::base::Split(argv[i], ",");
+
         if (parts.size() != 4) {
-            LOG(ERROR) << "Malformed message, expected three sub-arguments.";
+            LOG(ERROR) << "Malformed message, expected at least four sub-arguments.";
             return false;
         }
-        auto handler = user_server_.AddHandler(parts[0], parts[1], parts[2], parts[3]);
-        if (!handler || !user_server_.StartHandler(handler)) {
+        auto handler =
+                user_server_.AddHandler(parts[0], parts[1], parts[2], parts[3], FLAGS_worker_count,
+                                        FLAGS_o_direct, FLAGS_cow_op_merge_size);
+        if (!handler || !user_server_.StartHandler(parts[0])) {
             return false;
         }
     }
+
+    // We reach this point only during selinux transition during device boot.
+    // At this point, all threads are spin up and are ready to serve the I/O
+    // requests for dm-user. Lets inform init.
+    auto client = std::make_unique<SnapuserdClient>();
+    client->NotifyTransitionDaemonIsReady();
 
     // Skip the accept() call to avoid spurious log spam. The server will still
     // run until all handlers have completed.
     return user_server_.WaitForSocket();
-}
-
-bool Daemon::StartServerForDmSnapshot(int arg_start, int argc, char** argv) {
-    sigfillset(&signal_mask_);
-    sigdelset(&signal_mask_, SIGINT);
-    sigdelset(&signal_mask_, SIGTERM);
-    sigdelset(&signal_mask_, SIGUSR1);
-
-    // Masking signals here ensure that after this point, we won't handle INT/TERM
-    // until after we call into ppoll()
-    signal(SIGINT, Daemon::SignalHandler);
-    signal(SIGTERM, Daemon::SignalHandler);
-    signal(SIGPIPE, Daemon::SignalHandler);
-    signal(SIGUSR1, Daemon::SignalHandler);
-
-    MaskAllSignalsExceptIntAndTerm();
-
-    if (FLAGS_socket_handoff) {
-        return server_.RunForSocketHandoff();
-    }
-    if (!FLAGS_no_socket) {
-        if (!server_.Start(FLAGS_socket)) {
-            return false;
-        }
-        return server_.Run();
-    }
-
-    for (int i = arg_start; i < argc; i++) {
-        auto parts = android::base::Split(argv[i], ",");
-        if (parts.size() != 3) {
-            LOG(ERROR) << "Malformed message, expected three sub-arguments.";
-            return false;
-        }
-        auto handler = server_.AddHandler(parts[0], parts[1], parts[2]);
-        if (!handler || !server_.StartHandler(handler)) {
-            return false;
-        }
-    }
-
-    // Skip the accept() call to avoid spurious log spam. The server will still
-    // run until all handlers have completed.
-    return server_.WaitForSocket();
 }
 
 void Daemon::MaskAllSignalsExceptIntAndTerm() {
@@ -192,16 +160,12 @@ void Daemon::Interrupt() {
     // and verify it through a temp variable.
     if (user_server_.IsServerRunning()) {
         user_server_.Interrupt();
-    } else {
-        server_.Interrupt();
     }
 }
 
 void Daemon::ReceivedSocketSignal() {
     if (user_server_.IsServerRunning()) {
         user_server_.ReceivedSocketSignal();
-    } else {
-        server_.ReceivedSocketSignal();
     }
 }
 

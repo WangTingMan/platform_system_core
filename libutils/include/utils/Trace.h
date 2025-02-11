@@ -17,7 +17,10 @@
 #ifndef ANDROID_TRACE_H
 #define ANDROID_TRACE_H
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 64d68e1d6
 #include <stdint.h>
 
 #include <cutils/trace.h>
@@ -50,5 +53,8 @@ private:
 
 }  // namespace android
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 64d68e1d6
 #endif // ANDROID_TRACE_H

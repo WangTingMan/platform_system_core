@@ -22,35 +22,22 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <pwd.h>
-#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <time.h>
 #include <unistd.h>
 
-#include <regex>
+#include <optional>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
-#include <android-base/properties.h>
-#include <android-base/stringprintf.h>
-#include <android-base/unique_fd.h>
-#include <android/cgrouprc.h>
-#include <json/reader.h>
-#include <json/value.h>
-#include <processgroup/format/cgroup_file.h>
+#include <processgroup/cgroup_descriptor.h>
 #include <processgroup/processgroup.h>
 #include <processgroup/setup.h>
+#include <processgroup/util.h>
 
-#include "cgroup_descriptor.h"
-
-using android::base::GetUintProperty;
-using android::base::StringPrintf;
-using android::base::unique_fd;
-
-namespace android {
-namespace cgrouprc {
+#include "../build_flags.h"
+#include "../internal.h"
 
 static constexpr const char* CGROUPS_DESC_FILE = "/etc/cgroups.json";
 static constexpr const char* CGROUPS_DESC_VENDOR_FILE = "/vendor/etc/cgroups.json";
@@ -144,201 +131,105 @@ static bool Mkdir(const std::string& path, mode_t mode, const std::string& uid,
     return true;
 }
 
-static void MergeCgroupToDescriptors(std::map<std::string, CgroupDescriptor>* descriptors,
-                                     const Json::Value& cgroup, const std::string& name,
-                                     const std::string& root_path, int cgroups_version) {
-    const std::string cgroup_path = cgroup["Path"].asString();
-    std::string path;
-
-    if (!root_path.empty()) {
-        path = root_path;
-        if (cgroup_path != ".") {
-            path += "/";
-            path += cgroup_path;
-        }
-    } else {
-        path = cgroup_path;
-    }
-
-    uint32_t controller_flags = 0;
-
-    if (cgroup["NeedsActivation"].isBool() && cgroup["NeedsActivation"].asBool()) {
-        controller_flags |= CGROUPRC_CONTROLLER_FLAG_NEEDS_ACTIVATION;
-    }
-
-    if (cgroup["Optional"].isBool() && cgroup["Optional"].asBool()) {
-        controller_flags |= CGROUPRC_CONTROLLER_FLAG_OPTIONAL;
-    }
-
-    CgroupDescriptor descriptor(
-            cgroups_version, name, path, std::strtoul(cgroup["Mode"].asString().c_str(), 0, 8),
-            cgroup["UID"].asString(), cgroup["GID"].asString(), controller_flags);
-
-    auto iter = descriptors->find(name);
-    if (iter == descriptors->end()) {
-        descriptors->emplace(name, descriptor);
-    } else {
-        iter->second = descriptor;
-    }
-}
-
-static bool ReadDescriptorsFromFile(const std::string& file_name,
-                                    std::map<std::string, CgroupDescriptor>* descriptors) {
-    std::vector<CgroupDescriptor> result;
-    std::string json_doc;
-
-    if (!android::base::ReadFileToString(file_name, &json_doc)) {
-        PLOG(ERROR) << "Failed to read task profiles from " << file_name;
-        return false;
-    }
-
-    Json::CharReaderBuilder builder;
-    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-    Json::Value root;
-    std::string errorMessage;
-    if (!reader->parse(&*json_doc.begin(), &*json_doc.end(), &root, &errorMessage)) {
-        LOG(ERROR) << "Failed to parse cgroups description: " << errorMessage;
-        return false;
-    }
-
-    if (root.isMember("Cgroups")) {
-        const Json::Value& cgroups = root["Cgroups"];
-        for (Json::Value::ArrayIndex i = 0; i < cgroups.size(); ++i) {
-            std::string name = cgroups[i]["Controller"].asString();
-            MergeCgroupToDescriptors(descriptors, cgroups[i], name, "", 1);
-        }
-    }
-
-    if (root.isMember("Cgroups2")) {
-        const Json::Value& cgroups2 = root["Cgroups2"];
-        std::string root_path = cgroups2["Path"].asString();
-        MergeCgroupToDescriptors(descriptors, cgroups2, CGROUPV2_CONTROLLER_NAME, "", 2);
-
-        const Json::Value& childGroups = cgroups2["Controllers"];
-        for (Json::Value::ArrayIndex i = 0; i < childGroups.size(); ++i) {
-            std::string name = childGroups[i]["Controller"].asString();
-            MergeCgroupToDescriptors(descriptors, childGroups[i], name, root_path, 2);
-        }
-    }
-
-    return true;
-}
-
-static bool ReadDescriptors(std::map<std::string, CgroupDescriptor>* descriptors) {
-    // load system cgroup descriptors
-    if (!ReadDescriptorsFromFile(CGROUPS_DESC_FILE, descriptors)) {
-        return false;
-    }
-
-    // load API-level specific system cgroups descriptors if available
-    unsigned int api_level = GetUintProperty<unsigned int>("ro.product.first_api_level", 0);
-    if (api_level > 0) {
-        std::string api_cgroups_path =
-                android::base::StringPrintf(TEMPLATE_CGROUPS_DESC_API_FILE, api_level);
-        if (!access(api_cgroups_path.c_str(), F_OK) || errno != ENOENT) {
-            if (!ReadDescriptorsFromFile(api_cgroups_path, descriptors)) {
-                return false;
-            }
-        }
-    }
-
-    // load vendor cgroup descriptors if the file exists
-    if (!access(CGROUPS_DESC_VENDOR_FILE, F_OK) &&
-        !ReadDescriptorsFromFile(CGROUPS_DESC_VENDOR_FILE, descriptors)) {
-        return false;
-    }
-
-    return true;
-}
-
 // To avoid issues in sdk_mac build
 #if defined(__ANDROID__)
 
-static bool SetupCgroup(const CgroupDescriptor& descriptor) {
-    const format::CgroupController* controller = descriptor.controller();
+static bool IsOptionalController(const CgroupController* controller) {
+    return controller->flags() & CGROUPRC_CONTROLLER_FLAG_OPTIONAL;
+}
 
-    int result;
-    if (controller->version() == 2) {
-        result = 0;
-        if (!strcmp(controller->name(), CGROUPV2_CONTROLLER_NAME)) {
-            // /sys/fs/cgroup is created by cgroup2 with specific selinux permissions,
-            // try to create again in case the mount point is changed
-            if (!Mkdir(controller->path(), 0, "", "")) {
-                LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
-                return false;
-            }
+static bool MountV2CgroupController(const CgroupDescriptor& descriptor) {
+    const CgroupController* controller = descriptor.controller();
 
-            // The memory_recursiveprot mount option has been introduced by kernel commit
-            // 8a931f801340 ("mm: memcontrol: recursive memory.low protection"; v5.7). Try first to
-            // mount with that option enabled. If mounting fails because the kernel is too old,
-            // retry without that mount option.
-            if (mount("none", controller->path(), "cgroup2", MS_NODEV | MS_NOEXEC | MS_NOSUID,
-                      "memory_recursiveprot") < 0) {
-                LOG(INFO) << "Mounting memcg with memory_recursiveprot failed. Retrying without.";
-                if (mount("none", controller->path(), "cgroup2", MS_NODEV | MS_NOEXEC | MS_NOSUID,
-                          nullptr) < 0) {
-                    PLOG(ERROR) << "Failed to mount cgroup v2";
-                }
-            }
+    // /sys/fs/cgroup is created by cgroup2 with specific selinux permissions,
+    // try to create again in case the mount point is changed
+    if (!Mkdir(controller->path(), 0, "", "")) {
+        LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
+        return false;
+    }
 
-            // selinux permissions change after mounting, so it's ok to change mode and owner now
-            if (!ChangeDirModeAndOwner(controller->path(), descriptor.mode(), descriptor.uid(),
-                                       descriptor.gid())) {
-                LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
-                result = -1;
-            }
-        } else {
-            if (!Mkdir(controller->path(), descriptor.mode(), descriptor.uid(), descriptor.gid())) {
-                LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
-                return false;
-            }
-
-            if (controller->flags() & CGROUPRC_CONTROLLER_FLAG_NEEDS_ACTIVATION) {
-                std::string str = std::string("+") + controller->name();
-                std::string path = std::string(controller->path()) + "/cgroup.subtree_control";
-
-                if (!base::WriteStringToFile(str, path)) {
-                    LOG(ERROR) << "Failed to activate controller " << controller->name();
-                    return false;
-                }
-            }
-        }
-    } else {
-        // mkdir <path> [mode] [owner] [group]
-        if (!Mkdir(controller->path(), descriptor.mode(), descriptor.uid(), descriptor.gid())) {
-            LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
-            return false;
-        }
-
-        // Unfortunately historically cpuset controller was mounted using a mount command
-        // different from all other controllers. This results in controller attributes not
-        // to be prepended with controller name. For example this way instead of
-        // /dev/cpuset/cpuset.cpus the attribute becomes /dev/cpuset/cpus which is what
-        // the system currently expects.
-        if (!strcmp(controller->name(), "cpuset")) {
-            // mount cpuset none /dev/cpuset nodev noexec nosuid
-            result = mount("none", controller->path(), controller->name(),
-                           MS_NODEV | MS_NOEXEC | MS_NOSUID, nullptr);
-        } else {
-            // mount cgroup none <path> nodev noexec nosuid <controller>
-            result = mount("none", controller->path(), "cgroup", MS_NODEV | MS_NOEXEC | MS_NOSUID,
-                           controller->name());
+    // The memory_recursiveprot mount option has been introduced by kernel commit
+    // 8a931f801340 ("mm: memcontrol: recursive memory.low protection"; v5.7). Try first to
+    // mount with that option enabled. If mounting fails because the kernel is too old,
+    // retry without that mount option.
+    if (mount("none", controller->path(), "cgroup2", MS_NODEV | MS_NOEXEC | MS_NOSUID,
+              "memory_recursiveprot") < 0) {
+        LOG(INFO) << "Mounting memcg with memory_recursiveprot failed. Retrying without.";
+        if (mount("none", controller->path(), "cgroup2", MS_NODEV | MS_NOEXEC | MS_NOSUID,
+                  nullptr) < 0) {
+            PLOG(ERROR) << "Failed to mount cgroup v2";
+            return IsOptionalController(controller);
         }
     }
 
-    if (result < 0) {
-        bool optional = controller->flags() & CGROUPRC_CONTROLLER_FLAG_OPTIONAL;
-
-        if (optional && errno == EINVAL) {
-            // Optional controllers are allowed to fail to mount if kernel does not support them
-            LOG(INFO) << "Optional " << controller->name() << " cgroup controller is not mounted";
-        } else {
-            PLOG(ERROR) << "Failed to mount " << controller->name() << " cgroup";
-            return false;
-        }
+    // selinux permissions change after mounting, so it's ok to change mode and owner now
+    if (!ChangeDirModeAndOwner(controller->path(), descriptor.mode(), descriptor.uid(),
+                               descriptor.gid())) {
+        PLOG(ERROR) << "Change of ownership or mode failed for controller " << controller->name();
+        return IsOptionalController(controller);
     }
 
     return true;
+}
+
+static bool ActivateV2CgroupController(const CgroupDescriptor& descriptor) {
+    const CgroupController* controller = descriptor.controller();
+
+    if (!Mkdir(controller->path(), descriptor.mode(), descriptor.uid(), descriptor.gid())) {
+        LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
+        return false;
+    }
+
+    return ::ActivateControllers(controller->path(), {{controller->name(), descriptor}});
+}
+
+static bool MountV1CgroupController(const CgroupDescriptor& descriptor) {
+    const CgroupController* controller = descriptor.controller();
+
+    // mkdir <path> [mode] [owner] [group]
+    if (!Mkdir(controller->path(), descriptor.mode(), descriptor.uid(), descriptor.gid())) {
+        LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
+        return false;
+    }
+
+    // Unfortunately historically cpuset controller was mounted using a mount command
+    // different from all other controllers. This results in controller attributes not
+    // to be prepended with controller name. For example this way instead of
+    // /dev/cpuset/cpuset.cpus the attribute becomes /dev/cpuset/cpus which is what
+    // the system currently expects.
+    int res;
+    if (!strcmp(controller->name(), "cpuset")) {
+        // mount cpuset none /dev/cpuset nodev noexec nosuid
+        res = mount("none", controller->path(), controller->name(),
+                    MS_NODEV | MS_NOEXEC | MS_NOSUID, nullptr);
+    } else {
+        // mount cgroup none <path> nodev noexec nosuid <controller>
+        res = mount("none", controller->path(), "cgroup", MS_NODEV | MS_NOEXEC | MS_NOSUID,
+                    controller->name());
+    }
+    if (res != 0) {
+        if (IsOptionalController(controller)) {
+            PLOG(INFO) << "Failed to mount optional controller " << controller->name();
+            return true;
+        }
+        PLOG(ERROR) << "Failed to mount controller " << controller->name();
+        return false;
+    }
+    return true;
+}
+
+static bool SetupCgroup(const CgroupDescriptor& descriptor) {
+    const CgroupController* controller = descriptor.controller();
+
+    if (controller->version() == 2) {
+        if (controller->name() == CGROUPV2_HIERARCHY_NAME) {
+            return MountV2CgroupController(descriptor);
+        } else {
+            return ActivateV2CgroupController(descriptor);
+        }
+    } else {
+        return MountV1CgroupController(descriptor);
+    }
 }
 
 #else
@@ -350,39 +241,14 @@ static bool SetupCgroup(const CgroupDescriptor&) {
 
 #endif
 
-static bool WriteRcFile(const std::map<std::string, CgroupDescriptor>& descriptors) {
-    unique_fd fd(TEMP_FAILURE_RETRY(open(CGROUPS_RC_PATH, O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC,
-                                         S_IRUSR | S_IRGRP | S_IROTH)));
-    if (fd < 0) {
-        PLOG(ERROR) << "open() failed for " << CGROUPS_RC_PATH;
-        return false;
-    }
-
-    format::CgroupFile fl;
-    fl.version_ = format::CgroupFile::FILE_CURR_VERSION;
-    fl.controller_count_ = descriptors.size();
-    int ret = TEMP_FAILURE_RETRY(write(fd, &fl, sizeof(fl)));
-    if (ret < 0) {
-        PLOG(ERROR) << "write() failed for " << CGROUPS_RC_PATH;
-        return false;
-    }
-
-    for (const auto& [name, descriptor] : descriptors) {
-        ret = TEMP_FAILURE_RETRY(
-                write(fd, descriptor.controller(), sizeof(format::CgroupController)));
-        if (ret < 0) {
-            PLOG(ERROR) << "write() failed for " << CGROUPS_RC_PATH;
-            return false;
-        }
-    }
-
-    return true;
-}
-
 CgroupDescriptor::CgroupDescriptor(uint32_t version, const std::string& name,
                                    const std::string& path, mode_t mode, const std::string& uid,
-                                   const std::string& gid, uint32_t flags = 0)
-    : controller_(version, flags, name, path), mode_(mode), uid_(uid), gid_(gid) {}
+                                   const std::string& gid, uint32_t flags,
+                                   uint32_t max_activation_depth)
+    : controller_(version, flags, name, path, max_activation_depth),
+      mode_(mode),
+      uid_(uid),
+      gid_(gid) {}
 
 void CgroupDescriptor::set_mounted(bool mounted) {
     uint32_t flags = controller_.flags();
@@ -394,24 +260,60 @@ void CgroupDescriptor::set_mounted(bool mounted) {
     controller_.set_flags(flags);
 }
 
-}  // namespace cgrouprc
-}  // namespace android
+static std::optional<bool> MGLRUDisabled() {
+    const std::string file_name = "/sys/kernel/mm/lru_gen/enabled";
+    std::string content;
+    if (!android::base::ReadFileToString(file_name, &content)) {
+        PLOG(ERROR) << "Failed to read MGLRU state from " << file_name;
+        return {};
+    }
+
+    return content == "0x0000";
+}
+
+static std::optional<bool> MEMCGDisabled(const CgroupDescriptorMap& descriptors) {
+    std::string cgroup_v2_root = CGROUP_V2_ROOT_DEFAULT;
+    const auto it = descriptors.find(CGROUPV2_HIERARCHY_NAME);
+    if (it == descriptors.end()) {
+        LOG(WARNING) << "No Cgroups2 path found in cgroups.json. Vendor has modified Android, and "
+                     << "kernel memory use will be higher than intended.";
+    } else if (it->second.controller()->path() != cgroup_v2_root) {
+        cgroup_v2_root = it->second.controller()->path();
+    }
+
+    const std::string file_name = cgroup_v2_root + "/cgroup.controllers";
+    std::string content;
+    if (!android::base::ReadFileToString(file_name, &content)) {
+        PLOG(ERROR) << "Failed to read cgroup controllers from " << file_name;
+        return {};
+    }
+
+    // If we've forced memcg to v2 and it's not available, then it could only have been disabled
+    // on the kernel command line (GKI sets CONFIG_MEMCG).
+    return content.find("memory") == std::string::npos;
+}
+
+static bool CreateV2SubHierarchy(const std::string& path, const CgroupDescriptorMap& descriptors) {
+    const auto cgv2_iter = descriptors.find(CGROUPV2_HIERARCHY_NAME);
+    if (cgv2_iter == descriptors.end()) return false;
+    const CgroupDescriptor cgv2_descriptor = cgv2_iter->second;
+
+    if (!Mkdir(path, cgv2_descriptor.mode(), cgv2_descriptor.uid(), cgv2_descriptor.gid())) {
+        PLOG(ERROR) << "Failed to create directory for " << path;
+        return false;
+    }
+
+    // Activate all v2 controllers in path so they can be activated in
+    // children as they are created.
+    return ::ActivateControllers(path, descriptors);
+}
 
 bool CgroupSetup() {
-    using namespace android::cgrouprc;
-
-    std::map<std::string, CgroupDescriptor> descriptors;
+    CgroupDescriptorMap descriptors;
 
     if (getpid() != 1) {
         LOG(ERROR) << "Cgroup setup can be done only by init process";
         return false;
-    }
-
-    // Make sure we do this only one time. No need for std::call_once because
-    // init is a single-threaded process
-    if (access(CGROUPS_RC_PATH, F_OK) == 0) {
-        LOG(WARNING) << "Attempt to call SetupCgroups more than once";
-        return true;
     }
 
     // load cgroups.json file
@@ -422,33 +324,41 @@ bool CgroupSetup() {
 
     // setup cgroups
     for (auto& [name, descriptor] : descriptors) {
-        if (SetupCgroup(descriptor)) {
-            descriptor.set_mounted(true);
-        } else {
+        if (descriptor.controller()->flags() & CGROUPRC_CONTROLLER_FLAG_MOUNTED) {
+            LOG(WARNING) << "Attempt to call CgroupSetup() more than once";
+            return true;
+        }
+
+        if (!SetupCgroup(descriptor)) {
             // issue a warning and proceed with the next cgroup
             LOG(WARNING) << "Failed to setup " << name << " cgroup";
         }
     }
 
-    // mkdir <CGROUPS_RC_DIR> 0711 system system
-    if (!Mkdir(android::base::Dirname(CGROUPS_RC_PATH), 0711, "system", "system")) {
-        LOG(ERROR) << "Failed to create directory for " << CGROUPS_RC_PATH << " file";
-        return false;
+    if (android::libprocessgroup_flags::force_memcg_v2()) {
+        if (MGLRUDisabled().value_or(false)) {
+            LOG(WARNING) << "Memcg forced to v2 hierarchy with MGLRU disabled! "
+                         << "Global reclaim performance will suffer.";
+        }
+        if (MEMCGDisabled(descriptors).value_or(false)) {
+            LOG(WARNING) << "Memcg forced to v2 hierarchy while memcg is disabled by kernel "
+                         << "command line!";
+        }
     }
 
-    // Generate <CGROUPS_RC_FILE> file which can be directly mmapped into
-    // process memory. This optimizes performance, memory usage
-    // and limits infrormation shared with unprivileged processes
-    // to the minimum subset of information from cgroups.json
-    if (!WriteRcFile(descriptors)) {
-        LOG(ERROR) << "Failed to write " << CGROUPS_RC_PATH << " file";
-        return false;
-    }
+    // System / app isolation.
+    // This really belongs in early-init in init.rc, but we cannot use the flag there.
+    if (android::libprocessgroup_flags::cgroup_v2_sys_app_isolation()) {
+        const auto it = descriptors.find(CGROUPV2_HIERARCHY_NAME);
+        const std::string cgroup_v2_root = (it == descriptors.end())
+                                                   ? CGROUP_V2_ROOT_DEFAULT
+                                                   : it->second.controller()->path();
 
-    // chmod 0644 <CGROUPS_RC_PATH>
-    if (fchmodat(AT_FDCWD, CGROUPS_RC_PATH, 0644, AT_SYMLINK_NOFOLLOW) < 0) {
-        PLOG(ERROR) << "fchmodat() failed";
-        return false;
+        LOG(INFO) << "Using system/app isolation under: " << cgroup_v2_root;
+        if (!CreateV2SubHierarchy(cgroup_v2_root + "/apps", descriptors) ||
+            !CreateV2SubHierarchy(cgroup_v2_root + "/system", descriptors)) {
+            return false;
+        }
     }
 
     return true;

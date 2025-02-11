@@ -16,23 +16,20 @@
 
 #pragma once
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
 
-#include <map>
-#include <memory>
-#include <mutex>
+#include <cstdint>
 #include <string>
-#include <vector>
 
-#include <android/cgrouprc.h>
+#include <processgroup/cgroup_controller.h>
+#include <processgroup/util.h>
 
-// Convenient wrapper of an ACgroupController pointer.
-class CgroupController {
+// Convenient wrapper of a CgroupController pointer.
+class CgroupControllerWrapper {
   public:
     // Does not own controller
-    explicit CgroupController(const ACgroupController* controller)
-        : controller_(controller), state_(UNKNOWN) {}
+    explicit CgroupControllerWrapper(const CgroupController* controller)
+        : controller_(controller) {}
 
     uint32_t version() const;
     const char* name() const;
@@ -43,7 +40,8 @@ class CgroupController {
 
     std::string GetTasksFilePath(const std::string& path) const;
     std::string GetProcsFilePath(const std::string& path, uid_t uid, pid_t pid) const;
-    bool GetTaskGroup(int tid, std::string* group) const;
+    bool GetTaskGroup(pid_t tid, std::string* group) const;
+
   private:
     enum ControllerState {
         UNKNOWN = 0,
@@ -51,23 +49,21 @@ class CgroupController {
         MISSING = 2,
     };
 
-    const ACgroupController* controller_ = nullptr;
-    ControllerState state_;
+    const CgroupController* controller_ = nullptr; // CgroupMap owns the object behind this pointer
+    ControllerState state_ = ControllerState::UNKNOWN;
 };
 
 class CgroupMap {
   public:
-    // Selinux policy ensures only init process can successfully use this function
-    static bool SetupCgroups();
-
     static CgroupMap& GetInstance();
-    CgroupController FindController(const std::string& name) const;
-    CgroupController FindControllerByPath(const std::string& path) const;
-    int ActivateControllers(const std::string& path) const;
+    CgroupControllerWrapper FindController(const std::string& name) const;
+    CgroupControllerWrapper FindControllerByPath(const std::string& path) const;
+    bool ActivateControllers(const std::string& path) const;
 
   private:
     bool loaded_ = false;
+    CgroupDescriptorMap descriptors_;
     CgroupMap();
-    bool LoadRcFile();
+    bool LoadDescriptors();
     void Print() const;
 };

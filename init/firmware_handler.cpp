@@ -33,9 +33,12 @@
 #include <android-base/chrono_utils.h>
 #include <android-base/file.h>
 #include <android-base/logging.h>
+#include <android-base/properties.h>
 #include <android-base/scopeguard.h>
 #include <android-base/strings.h>
 #include <android-base/unique_fd.h>
+
+#include "exthandler/exthandler.h"
 
 using android::base::ReadFdToString;
 using android::base::Socketpair;
@@ -43,6 +46,7 @@ using android::base::Split;
 using android::base::Timer;
 using android::base::Trim;
 using android::base::unique_fd;
+using android::base::WaitForProperty;
 using android::base::WriteFully;
 
 namespace android {
@@ -82,6 +86,33 @@ static bool IsBooting() {
     return access("/dev/.booting", F_OK) == 0;
 }
 
+static bool IsApexActivated() {
+    static bool apex_activated = []() {
+        // Wait for com.android.runtime.apex activation
+        // Property name and value must be kept in sync with system/apexd/apex/apex_constants.h
+        // 60s is the default firmware sysfs fallback timeout. (/sys/class/firmware/timeout)
+        if (!WaitForProperty("apexd.status", "activated", 60s)) {
+            LOG(ERROR) << "Apexd activation wait timeout";
+            return false;
+        }
+        return true;
+    }();
+
+    return apex_activated;
+}
+
+static bool NeedsRerunExternalHandler() {
+    static bool first = true;
+
+    // Rerun external handler only on the first try and when apex is activated
+    if (first) {
+        first = false;
+        return IsApexActivated();
+    }
+
+    return first;
+}
+
 ExternalFirmwareHandler::ExternalFirmwareHandler(std::string devpath, uid_t uid, gid_t gid,
                                                  std::string handler_path)
     : devpath(std::move(devpath)), uid(uid), gid(gid), handler_path(std::move(handler_path)) {
@@ -107,100 +138,6 @@ FirmwareHandler::FirmwareHandler(std::vector<std::string> firmware_directories,
     : firmware_directories_(std::move(firmware_directories)),
       external_firmware_handlers_(std::move(external_firmware_handlers)) {}
 
-Result<std::string> FirmwareHandler::RunExternalHandler(const std::string& handler, uid_t uid,
-                                                        gid_t gid, const Uevent& uevent) const {
-    unique_fd child_stdout;
-    unique_fd parent_stdout;
-    if (!Socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, &child_stdout, &parent_stdout)) {
-        return ErrnoError() << "Socketpair() for stdout failed";
-    }
-
-    unique_fd child_stderr;
-    unique_fd parent_stderr;
-    if (!Socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, &child_stderr, &parent_stderr)) {
-        return ErrnoError() << "Socketpair() for stderr failed";
-    }
-
-    signal(SIGCHLD, SIG_DFL);
-
-    auto pid = fork();
-    if (pid < 0) {
-        return ErrnoError() << "fork() failed";
-    }
-
-    if (pid == 0) {
-        setenv("FIRMWARE", uevent.firmware.c_str(), 1);
-        setenv("DEVPATH", uevent.path.c_str(), 1);
-        parent_stdout.reset();
-        parent_stderr.reset();
-        close(STDOUT_FILENO);
-        close(STDERR_FILENO);
-        dup2(child_stdout.get(), STDOUT_FILENO);
-        dup2(child_stderr.get(), STDERR_FILENO);
-
-        auto args = Split(handler, " ");
-        std::vector<char*> c_args;
-        for (auto& arg : args) {
-            c_args.emplace_back(arg.data());
-        }
-        c_args.emplace_back(nullptr);
-
-        if (gid != 0) {
-            if (setgid(gid) != 0) {
-                fprintf(stderr, "setgid() failed: %s", strerror(errno));
-                _exit(EXIT_FAILURE);
-            }
-        }
-
-        if (setuid(uid) != 0) {
-            fprintf(stderr, "setuid() failed: %s", strerror(errno));
-            _exit(EXIT_FAILURE);
-        }
-
-        execv(c_args[0], c_args.data());
-        fprintf(stderr, "exec() failed: %s", strerror(errno));
-        _exit(EXIT_FAILURE);
-    }
-
-    child_stdout.reset();
-    child_stderr.reset();
-
-    int status;
-    pid_t waited_pid = TEMP_FAILURE_RETRY(waitpid(pid, &status, 0));
-    if (waited_pid == -1) {
-        return ErrnoError() << "waitpid() failed";
-    }
-
-    std::string stdout_content;
-    if (!ReadFdToString(parent_stdout.get(), &stdout_content)) {
-        return ErrnoError() << "ReadFdToString() for stdout failed";
-    }
-
-    std::string stderr_content;
-    if (ReadFdToString(parent_stderr.get(), &stderr_content)) {
-        auto messages = Split(stderr_content, "\n");
-        for (const auto& message : messages) {
-            if (!message.empty()) {
-                LOG(ERROR) << "External Firmware Handler: " << message;
-            }
-        }
-    } else {
-        LOG(ERROR) << "ReadFdToString() for stderr failed";
-    }
-
-    if (WIFEXITED(status)) {
-        if (WEXITSTATUS(status) == EXIT_SUCCESS) {
-            return Trim(stdout_content);
-        } else {
-            return Error() << "exited with status " << WEXITSTATUS(status);
-        }
-    } else if (WIFSIGNALED(status)) {
-        return Error() << "killed by signal " << WTERMSIG(status);
-    }
-
-    return Error() << "unexpected exit status " << status;
-}
-
 std::string FirmwareHandler::GetFirmwarePath(const Uevent& uevent) const {
     for (const auto& external_handler : external_firmware_handlers_) {
         if (external_handler.match(uevent.path)) {
@@ -208,8 +145,17 @@ std::string FirmwareHandler::GetFirmwarePath(const Uevent& uevent) const {
                       << "' for devpath: '" << uevent.path << "' firmware: '" << uevent.firmware
                       << "'";
 
+            std::unordered_map<std::string, std::string> envs_map;
+            envs_map["FIRMWARE"] = uevent.firmware;
+            envs_map["DEVPATH"] = uevent.path;
+
             auto result = RunExternalHandler(external_handler.handler_path, external_handler.uid,
-                                             external_handler.gid, uevent);
+                                             external_handler.gid, envs_map);
+            if (!result.ok() && NeedsRerunExternalHandler()) {
+                auto res = RunExternalHandler(external_handler.handler_path, external_handler.uid,
+                                              external_handler.gid, envs_map);
+                result = std::move(res);
+            }
             if (!result.ok()) {
                 LOG(ERROR) << "Using default firmware; External firmware handler failed: "
                            << result.error();
@@ -230,8 +176,9 @@ std::string FirmwareHandler::GetFirmwarePath(const Uevent& uevent) const {
     return uevent.firmware;
 }
 
-void FirmwareHandler::ProcessFirmwareEvent(const std::string& root,
+void FirmwareHandler::ProcessFirmwareEvent(const std::string& path,
                                            const std::string& firmware) const {
+    std::string root = "/sys" + path;
     std::string loading = root + "/loading";
     std::string data = root + "/data";
 
@@ -257,12 +204,13 @@ void FirmwareHandler::ProcessFirmwareEvent(const std::string& root,
             return false;
         }
         struct stat sb;
-        if (fstat(fw_fd, &sb) == -1) {
+        if (fstat(fw_fd.get(), &sb) == -1) {
             attempted_paths_and_errors.emplace_back("firmware: attempted " + file +
                                                     ", fstat failed: " + strerror(errno));
             return false;
         }
-        LoadFirmware(firmware, root, fw_fd, sb.st_size, loading_fd, data_fd);
+        LOG(INFO) << "found " << file << " for " << path;
+        LoadFirmware(firmware, root, fw_fd.get(), sb.st_size, loading_fd.get(), data_fd.get());
         return true;
     };
 
@@ -287,7 +235,7 @@ try_loading_again:
     }
 
     // Write "-1" as our response to the kernel's firmware request, since we have nothing for it.
-    write(loading_fd, "-1", 2);
+    write(loading_fd.get(), "-1", 2);
 }
 
 bool FirmwareHandler::ForEachFirmwareDirectory(
@@ -328,7 +276,7 @@ void FirmwareHandler::HandleUevent(const Uevent& uevent) {
     if (pid == 0) {
         Timer t;
         auto firmware = GetFirmwarePath(uevent);
-        ProcessFirmwareEvent("/sys" + uevent.path, firmware);
+        ProcessFirmwareEvent(uevent.path, firmware);
         LOG(INFO) << "loading " << uevent.path << " took " << t;
         _exit(EXIT_SUCCESS);
     }

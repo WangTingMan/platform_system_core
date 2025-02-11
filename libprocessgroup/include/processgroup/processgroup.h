@@ -16,28 +16,43 @@
 
 #pragma once
 
-#include <sys/cdefs.h>
 #include <sys/types.h>
+#include <initializer_list>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
-__BEGIN_DECLS
+static constexpr std::string CGROUPV2_HIERARCHY_NAME = "cgroup2";
 
-static constexpr const char* CGROUPV2_CONTROLLER_NAME = "cgroup2";
-
+bool CgroupsAvailable();
 bool CgroupGetControllerPath(const std::string& cgroup_name, std::string* path);
 bool CgroupGetControllerFromPath(const std::string& path, std::string* cgroup_name);
 bool CgroupGetAttributePath(const std::string& attr_name, std::string* path);
-bool CgroupGetAttributePathForTask(const std::string& attr_name, int tid, std::string* path);
+// Provides the path for an attribute in a specific process group
+// Returns false in case of error, true in case of success
+bool CgroupGetAttributePathForTask(const std::string& attr_name, pid_t tid, std::string* path);
+bool CgroupGetAttributePathForProcess(std::string_view attr_name, uid_t uid, pid_t pid,
+                                      std::string &path);
 
-bool SetTaskProfiles(int tid, const std::vector<std::string>& profiles, bool use_fd_cache = false);
+bool SetTaskProfiles(pid_t tid, const std::vector<std::string>& profiles,
+                     bool use_fd_cache = false);
 bool SetProcessProfiles(uid_t uid, pid_t pid, const std::vector<std::string>& profiles);
+bool SetUserProfiles(uid_t uid, const std::vector<std::string>& profiles);
+
+bool SetTaskProfiles(pid_t tid, std::initializer_list<std::string_view> profiles,
+                     bool use_fd_cache = false);
+bool SetProcessProfiles(uid_t uid, pid_t pid, std::initializer_list<std::string_view> profiles);
+#if _LIBCPP_STD_VER > 17
+bool SetTaskProfiles(pid_t tid, std::span<const std::string_view> profiles,
+                     bool use_fd_cache = false);
+bool SetProcessProfiles(uid_t uid, pid_t pid, std::span<const std::string_view> profiles);
+#endif
+
 
 #ifndef __ANDROID_VNDK__
 
 bool SetProcessProfilesCached(uid_t uid, pid_t pid, const std::vector<std::string>& profiles);
-
-static constexpr const char* CGROUPS_RC_PATH = "/dev/cgroup_info/cgroup.rc";
 
 bool UsePerAppMemcg();
 
@@ -46,33 +61,32 @@ bool UsePerAppMemcg();
 // should be active again. E.g. Zygote specialization for child process.
 void DropTaskProfilesResourceCaching();
 
-// Return 0 and removes the cgroup if there are no longer any processes in it.
-// Returns -1 in the case of an error occurring or if there are processes still running
-// even after retrying for up to 200ms.
-// If max_processes is not nullptr, it returns the maximum number of processes seen in the cgroup
-// during the killing process.  Note that this can be 0 if all processes from the process group have
-// already been terminated.
-int killProcessGroup(uid_t uid, int initialPid, int signal, int* max_processes = nullptr);
+// Return 0 if all processes were killed and the cgroup was successfully removed.
+// Returns -1 in the case of an error occurring or if there are processes still running.
+int killProcessGroup(uid_t uid, pid_t initialPid, int signal);
 
 // Returns the same as killProcessGroup(), however it does not retry, which means
 // that it only returns 0 in the case that the cgroup exists and it contains no processes.
-int killProcessGroupOnce(uid_t uid, int initialPid, int signal, int* max_processes = nullptr);
+int killProcessGroupOnce(uid_t uid, pid_t initialPid, int signal);
 
-int createProcessGroup(uid_t uid, int initialPid, bool memControl = false);
+// Sends the provided signal to all members of a process group, but does not wait for processes to
+// exit, or for the cgroup to be removed. Callers should also ensure that killProcessGroup is called
+// later to ensure the cgroup is fully removed, otherwise system resources will leak.
+// Returns true if no errors are encountered sending signals, otherwise false.
+bool sendSignalToProcessGroup(uid_t uid, pid_t initialPid, int signal);
+
+int createProcessGroup(uid_t uid, pid_t initialPid, bool memControl = false);
 
 // Set various properties of a process group. For these functions to work, the process group must
 // have been created by passing memControl=true to createProcessGroup.
-bool setProcessGroupSwappiness(uid_t uid, int initialPid, int swappiness);
-bool setProcessGroupSoftLimit(uid_t uid, int initialPid, int64_t softLimitInBytes);
-bool setProcessGroupLimit(uid_t uid, int initialPid, int64_t limitInBytes);
+bool setProcessGroupSwappiness(uid_t uid, pid_t initialPid, int swappiness);
+bool setProcessGroupSoftLimit(uid_t uid, pid_t initialPid, int64_t softLimitInBytes);
+bool setProcessGroupLimit(uid_t uid, pid_t initialPid, int64_t limitInBytes);
 
-void removeAllProcessGroups(void);
 void removeAllEmptyProcessGroups(void);
 
-// Provides the path for an attribute in a specific process group
-// Returns false in case of error, true in case of success
-bool getAttributePathForTask(const std::string& attr_name, int tid, std::string* path);
+// Check if a profile can be applied without failing.
+// Returns true if it can be applied without failing, false otherwise
+bool isProfileValidForProcess(const std::string& profile_name, uid_t uid, pid_t pid);
 
 #endif // __ANDROID_VNDK__
-
-__END_DECLS

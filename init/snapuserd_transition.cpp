@@ -25,6 +25,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <android-base/file.h>
 #include <android-base/logging.h>
@@ -61,7 +62,7 @@ static constexpr char kSnapuserdFirstStageInfoVar[] = "FIRST_STAGE_SNAPUSERD_INF
 static constexpr char kSnapuserdLabel[] = "u:object_r:snapuserd_exec:s0";
 static constexpr char kSnapuserdSocketLabel[] = "u:object_r:snapuserd_socket:s0";
 
-void LaunchFirstStageSnapuserd(SnapshotDriver driver) {
+void LaunchFirstStageSnapuserd() {
     SocketDescriptor socket_desc;
     socket_desc.name = android::snapshot::kSnapuserdSocket;
     socket_desc.type = SOCK_STREAM;
@@ -84,22 +85,13 @@ void LaunchFirstStageSnapuserd(SnapshotDriver driver) {
     if (pid == 0) {
         socket->Publish();
 
-        if (driver == SnapshotDriver::DM_USER) {
-            char arg0[] = "/system/bin/snapuserd";
-            char arg1[] = "-user_snapshot";
-            char* const argv[] = {arg0, arg1, nullptr};
-            if (execv(arg0, argv) < 0) {
-                PLOG(FATAL) << "Cannot launch snapuserd; execv failed";
-            }
-            _exit(127);
-        } else {
-            char arg0[] = "/system/bin/snapuserd";
-            char* const argv[] = {arg0, nullptr};
-            if (execv(arg0, argv) < 0) {
-                PLOG(FATAL) << "Cannot launch snapuserd; execv failed";
-            }
-            _exit(127);
+        char arg0[] = "/system/bin/snapuserd";
+        char arg1[] = "-user_snapshot";
+        char* const argv[] = {arg0, arg1, nullptr};
+        if (execv(arg0, argv) < 0) {
+            PLOG(FATAL) << "Cannot launch snapuserd; execv failed";
         }
+        _exit(127);
     }
 
     auto client = SnapuserdClient::Connect(android::snapshot::kSnapuserdSocket, 10s);
@@ -108,9 +100,17 @@ void LaunchFirstStageSnapuserd(SnapshotDriver driver) {
     }
     if (client->SupportsSecondStageSocketHandoff()) {
         setenv(kSnapuserdFirstStageInfoVar, "socket", 1);
+        auto sm = SnapshotManager::NewForFirstStageMount();
+        if (!sm->MarkSnapuserdFromSystem()) {
+            LOG(ERROR) << "Failed to update MarkSnapuserdFromSystem";
+        }
     }
 
     setenv(kSnapuserdFirstStagePidVar, std::to_string(pid).c_str(), 1);
+
+    if (!client->RemoveTransitionedDaemonIndicator()) {
+        LOG(ERROR) << "RemoveTransitionedDaemonIndicator failed";
+    }
 
     LOG(INFO) << "Relaunched snapuserd with pid: " << pid;
 }
@@ -190,22 +190,20 @@ static void LockAllSystemPages() {
             return;
         }
         auto start = reinterpret_cast<const void*>(map.start);
-        auto len = map.end - map.start;
+        uint64_t len = android::procinfo::MappedFileSize(map);
         if (!len) {
             return;
         }
+
         if (mlock(start, len) < 0) {
-            LOG(ERROR) << "mlock failed, " << start << " for " << len << " bytes.";
+            PLOG(ERROR) << "\"" << map.name << "\": mlock(" << start << ", " << len
+                        << ") failed: pgoff = " << map.pgoff;
             ok = false;
         }
     };
 
     if (!android::procinfo::ReadProcessMaps(getpid(), callback) || !ok) {
-        LOG(FATAL) << "Could not process /proc/" << getpid() << "/maps file for init, "
-                   << "falling back to mlockall().";
-        if (mlockall(MCL_CURRENT) < 0) {
-            LOG(FATAL) << "mlockall failed";
-        }
+        LOG(FATAL) << "Could not process /proc/" << getpid() << "/maps file for init";
     }
 }
 
@@ -226,12 +224,9 @@ void SnapuserdSelinuxHelper::StartTransition() {
 
     argv_.emplace_back("snapuserd");
     argv_.emplace_back("-no_socket");
-    if (!sm_->DetachSnapuserdForSelinux(&argv_)) {
+    if (!sm_->PrepareSnapuserdArgsForSelinux(&argv_)) {
         LOG(FATAL) << "Could not perform selinux transition";
     }
-
-    // Make sure the process is gone so we don't have any selinux audits.
-    KillFirstStageSnapuserd(old_pid_);
 }
 
 void SnapuserdSelinuxHelper::FinishTransition() {
@@ -266,6 +261,19 @@ void SnapuserdSelinuxHelper::FinishTransition() {
  * we may see audit logs.
  */
 bool SnapuserdSelinuxHelper::TestSnapuserdIsReady() {
+    // Wait for the daemon to be fully up. Daemon will write to path
+    // /metadata/ota/daemon-alive-indicator only when all the threads
+    // are ready and attached to dm-user.
+    //
+    // This check will fail for GRF devices with vendor on Android S.
+    // snapuserd binary from Android S won't be able to communicate
+    // and hence, we will fallback and issue I/O to verify
+    // the presence of daemon.
+    auto client = std::make_unique<SnapuserdClient>();
+    if (!client->IsTransitionedDaemonReady()) {
+        LOG(ERROR) << "IsTransitionedDaemonReady failed";
+    }
+
     std::string dev = "/dev/block/mapper/system"s + fs_mgr_get_slot_suffix();
     android::base::unique_fd fd(open(dev.c_str(), O_RDONLY | O_DIRECT));
     if (fd < 0) {
@@ -301,6 +309,12 @@ bool SnapuserdSelinuxHelper::TestSnapuserdIsReady() {
 }
 
 void SnapuserdSelinuxHelper::RelaunchFirstStageSnapuserd() {
+    if (!sm_->DetachFirstStageSnapuserdForSelinux()) {
+        LOG(FATAL) << "Could not perform selinux transition";
+    }
+
+    KillFirstStageSnapuserd(old_pid_);
+
     auto fd = GetRamdiskSnapuserdFd();
     if (!fd) {
         LOG(FATAL) << "Environment variable " << kSnapuserdFirstStageFdVar << " was not set!";

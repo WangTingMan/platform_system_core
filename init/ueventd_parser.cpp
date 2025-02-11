@@ -218,6 +218,10 @@ Result<void> SubsystemParser::ParseDevName(std::vector<std::string>&& args) {
         subsystem_.devname_source_ = Subsystem::DEVNAME_UEVENT_DEVPATH;
         return {};
     }
+    if (args[1] == "sys_name") {
+        subsystem_.devname_source_ = Subsystem::DEVNAME_SYS_NAME;
+        return {};
+    }
 
     return Error() << "invalid devname '" << args[1] << "'";
 }
@@ -260,6 +264,8 @@ UeventdConfiguration ParseConfig(const std::vector<std::string>& configs) {
     parser.AddSectionParser("import", std::make_unique<ImportParser>(&parser));
     parser.AddSectionParser("subsystem",
                             std::make_unique<SubsystemParser>(&ueventd_configuration.subsystems));
+    parser.AddSectionParser("driver",
+                            std::make_unique<SubsystemParser>(&ueventd_configuration.drivers));
 
     using namespace std::placeholders;
     parser.AddSingleLineParser(

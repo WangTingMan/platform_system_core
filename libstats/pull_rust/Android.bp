@@ -28,7 +28,6 @@ rust_bindgen {
     ],
     source_stem: "bindings",
     bindgen_flags: [
-        "--size_t-is-usize",
         "--allowlist-function=AStatsEventList_addStatsEvent",
         "--allowlist-function=AStatsEvent_.*",
         "--allowlist-function=AStatsManager_.*",
@@ -51,6 +50,7 @@ rust_bindgen {
     min_sdk_version: "apex_inherit",
     apex_available: [
         "//apex_available:platform",
+        "com.android.resolv",
         "com.android.virt",
     ],
 }
@@ -60,7 +60,6 @@ rust_library {
     crate_name: "statspull_rust",
     srcs: ["stats_pull.rs"],
     rustlibs: [
-        "liblazy_static",
         "liblog_rust",
         "libstatslog_rust_header",
         "libstatspull_bindgen",

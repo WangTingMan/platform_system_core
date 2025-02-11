@@ -162,6 +162,28 @@ equals `true`, then the order of the commands executed will be:
     setprop e 1
     setprop f 2
 
+If the property `true` wasn't `true` when the `boot` was triggered, then the
+order of the commands executed will be:
+
+    setprop a 1
+    setprop b 2
+    setprop e 1
+    setprop f 2
+
+If the property `true` becomes `true` *AFTER* `boot` was triggered, nothing will
+be executed. The condition `boot && property:true=true` will be evaluated to
+false because the `boot` trigger is a past event.
+
+Note that when `ro.property_service.async_persist_writes` is `true`, there is no
+defined ordering between persistent setprops and non-persistent setprops. For
+example:
+
+    on boot
+        setprop a 1
+        setprop persist.b 2
+
+When `ro.property_service.async_persist_writes` is `true`, triggers for these
+two properties may execute in any order.
 
 Services
 --------
@@ -184,8 +206,10 @@ runs the service.
   capability without the "CAP\_" prefix, like "NET\_ADMIN" or "SETPCAP". See
   http://man7.org/linux/man-pages/man7/capabilities.7.html for a list of Linux
   capabilities.
-  If no capabilities are provided, then all capabilities are removed from this service, even if it
-  runs as root.
+  If no capabilities are provided, then behaviour depends on the user the service runs under:
+    * if it's root, then the service will run with all the capabitilies (note: whether the
+        service can actually use them is controlled by selinux);
+    * otherwise all capabilities will be dropped.
 
 `class <name> [ <name>\* ]`
 > Specify class names for the service.  All services in a
@@ -230,6 +254,10 @@ runs the service.
 > Open a file path and pass its fd to the launched process. _type_ must be
   "r", "w" or "rw".  For native executables see libcutils
   android\_get\_control\_file().
+
+`gentle_kill`
+> This service will be sent SIGTERM instead of SIGKILL when stopped. After a 200 ms timeout, it will
+  be sent SIGKILL.
 
 `group <groupname> [ <groupname>\* ]`
 > Change to 'groupname' before exec'ing this service.  Additional
@@ -316,11 +344,14 @@ runs the service.
   intended to be used with the `exec_start` builtin for any must-have checks during boot.
 
 `restart_period <seconds>`
-> If a non-oneshot service exits, it will be restarted at its start time plus
-  this period. It defaults to 5s to rate limit crashing services.
-  This can be increased for services that are meant to run periodically. For
-  example, it may be set to 3600 to indicate that the service should run every hour
-  or 86400 to indicate that the service should run every day.
+> If a non-oneshot service exits, it will be restarted at its previous start time plus this period.
+  The default value is 5s. This can be used to implement periodic services together with the
+  `timeout_period` command below. For example, it may be set to 3600 to indicate that the service
+  should run every hour or 86400 to indicate that the service should run every day. This can be set
+  to a value shorter than 5s for example 0, but the minimum 5s delay is enforced if the restart was
+  due to a crash. This is to rate limit persistentally crashing services. In other words,
+  `<seconds>` smaller than 5 is respected only when the service exits deliverately and successfully
+  (i.e. by calling exit(0)).
 
 `rlimit <resource> <cur> <max>`
 > This applies the given rlimit to the service. rlimits are inherited by child
@@ -338,6 +369,17 @@ runs the service.
 `setenv <name> <value>`
 > Set the environment variable _name_ to _value_ in the launched process.
 
+`shared_kallsyms`
+> If set, init will behave as if the service specified "file /proc/kallsyms r",
+  except the service will receive a duplicate of a single fd that init saved
+  during early second\_stage. This fd retains address visibility even after the
+  systemwide kptr\_restrict sysctl is set to its steady state on Android. The
+  ability to read from this fd is still constrained by selinux permissions,
+  which need to be granted separately and are gated by a neverallow.
+  Because of performance gotchas of concurrent use of this shared fd, all uses
+  need to coordinate via provisional flock(LOCK\_EX) locks on separately opened
+  /proc/kallsyms fds (since locking requires distinct open file descriptions).
+
 `shutdown <shutdown_behavior>`
 > Set shutdown behavior of the service process. When this is not specified,
   the service is killed during shutdown process by using SIGTERM and SIGKILL.
@@ -352,9 +394,10 @@ runs the service.
 
 `socket <name> <type> <perm> [ <user> [ <group> [ <seclabel> ] ] ]`
 > Create a UNIX domain socket named /dev/socket/_name_ and pass its fd to the
-  launched process.  _type_ must be "dgram", "stream" or "seqpacket".  _type_
-  may end with "+passcred" to enable SO_PASSCRED on the socket. User and
-  group default to 0.  'seclabel' is the SELinux security context for the
+  launched process.  The socket is created synchronously when the service starts.
+  _type_ must be "dgram", "stream" or "seqpacket".  _type_ may end with "+passcred"
+  to enable SO_PASSCRED on the socket or "+listen" to synchronously make it a listening socket.
+  User and group default to 0.  'seclabel' is the SELinux security context for the
   socket.  It defaults to the service security context, as specified by
   seclabel or computed based on the service executable file security context.
   For native executables see libcutils android\_get\_control\_socket().
@@ -367,8 +410,9 @@ runs the service.
   given console.
 
 `task_profiles <profile> [ <profile>\* ]`
-> Set task profiles for the process when it forks. This is designed to replace the use of
-  writepid option for moving a process into a cgroup.
+> Set task profiles. Before Android U, the profiles are applied to the main thread of the service.
+  For Android U and later, the profiles are applied to the entire service process. This is designed
+  to replace the use of writepid option for moving a process into a cgroup.
 
 `timeout_period <seconds>`
 > Provide a timeout after which point the service will be killed. The oneshot keyword is respected
@@ -397,7 +441,7 @@ runs the service.
   using this new mechanism, processes can use the user option to
   select their desired uid without ever running as root.
   As of Android O, processes can also request capabilities directly in their .rc
-  files. See the "capabilities" option below.
+  files. See the "capabilities" option above.
 
 `writepid <file> [ <file>\* ]`
 > Write the child's pid to the given files when it forks. Meant for
@@ -431,7 +475,9 @@ event trigger.
 
 For example:
 `on boot && property:a=b` defines an action that is only executed when
-the 'boot' event trigger happens and the property a equals b.
+the 'boot' event trigger happens and the property a equals b at the moment. This
+will NOT be executed when the property a transitions to value b after the `boot`
+event was triggered.
 
 `on property:a=b && property:c=d` defines an action that is executed
 at three times:
@@ -439,6 +485,12 @@ at three times:
    1. During initial boot if property a=b and property c=d.
    2. Any time that property a transitions to value b, while property c already equals d.
    3. Any time that property c transitions to value d, while property a already equals b.
+
+Note that, for bootloader-provided properties (ro.boot.*), their action cannot be
+auto-triggered until `boot` stage. If they need to be triggered earlier, like at `early-boot`
+stage, they should be tied to the `event`. For example:
+
+`on early-boot && property:a=b`.
 
 
 Trigger Sequence
@@ -464,9 +516,12 @@ have been omitted.
    4. `late-fs` - Mount partitions marked as latemounted.
    5. `post-fs-data` - Mount and configure `/data`; set up encryption. `/metadata` is
       reformatted here if it couldn't mount in first-stage init.
-   6. `zygote-start` - Start the zygote.
-   7. `early-boot` - After zygote has started.
-   8. `boot` - After `early-boot` actions have completed.
+   6. `post-fs-data-checkpointed` - Triggered when vold has completed committing a checkpoint
+      after an OTA update. Not triggered if checkpointing is not needed or supported.
+   7. `bpf-progs-loaded` - Starts things that want to start ASAP but need eBPF (incl. netd)
+   8. `zygote-start` - Start the zygote.
+   9. `early-boot` - After zygote has started.
+  10. `boot` - After `early-boot` actions have completed.
 
 Commands
 --------
@@ -599,7 +654,7 @@ provides the `aidl_lazy_test_1` interface.
   Properties are expanded within _level_.
 
 `mark_post_data`
-> Used to mark the point right after /data is mounted.
+> (This action is deprecated and no-op.)
 
 `mkdir <path> [<mode>] [<owner>] [<group>] [encryption=<action>] [key=<key>]`
 > Create a directory at _path_, optionally with the given mode, owner, and
@@ -610,17 +665,17 @@ provides the `aidl_lazy_test_1` interface.
   the current SELinux policy or its parent if not specified in the policy. If
   the directory exists, its security context will not be changed (even if
   different from the policy).
-
-  > _action_ can be one of:
-  * `None`: take no encryption action; directory will be encrypted if parent is.
-  * `Require`: encrypt directory, abort boot process if encryption fails
-  * `Attempt`: try to set an encryption policy, but continue if it fails
-  * `DeleteIfNecessary`: recursively delete directory if necessary to set
-  encryption policy.
-
-  > _key_ can be one of:
-  * `ref`: use the systemwide DE key
-  * `per_boot_ref`: use the key freshly generated on each boot.
+>
+> _action_ can be one of:
+>  * `None`: take no encryption action; directory will be encrypted if parent is.
+>  * `Require`: encrypt directory, abort boot process if encryption fails
+>  * `Attempt`: try to set an encryption policy, but continue if it fails
+>  * `DeleteIfNecessary`: recursively delete directory if necessary to set
+>  encryption policy.
+>
+> _key_ can be one of:
+>  * `ref`: use the systemwide DE key
+>  * `per_boot_ref`: use the key freshly generated on each boot.
 
 `mount_all [ <fstab> ] [--<option>]`
 > Calls fs\_mgr\_mount\_all on the given fs\_mgr-format fstab with optional
@@ -639,11 +694,12 @@ provides the `aidl_lazy_test_1` interface.
   _options_ include "barrier=1", "noauto\_da\_alloc", "discard", ... as
   a comma separated string, e.g. barrier=1,noauto\_da\_alloc
 
-`perform_apex_config`
+`perform_apex_config [--bootstrap]`
 > Performs tasks after APEXes are mounted. For example, creates data directories
   for the mounted APEXes, parses config file(s) from them, and updates linker
   configurations. Intended to be used only once when apexd notifies the mount
   event by setting `apexd.status` to ready.
+  Use --bootstrap when invoking in the bootstrap mount namespace.
 
 `restart [--only-if-running] <service>`
 > Stops and restarts a running service, does nothing if the service is currently
@@ -707,6 +763,9 @@ provides the `aidl_lazy_test_1` interface.
   fstab.${ro.hardware} or fstab.${ro.hardware.platform} will be scanned for
   under /odm/etc, /vendor/etc, or / at runtime, in that order.
 
+`swapoff <path>`
+> Stops swapping to the file or block device specified by path.
+
 `symlink <target> <path>`
 > Create a symbolic link at _path_ with the value _target_
 
@@ -749,7 +808,6 @@ provides the `aidl_lazy_test_1` interface.
 > Open the file at _path_ and write a string to it with write(2).
   If the file does not exist, it will be created. If it does exist,
   it will be truncated. Properties are expanded within _content_.
-
 
 Imports
 -------

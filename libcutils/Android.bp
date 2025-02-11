@@ -1,4 +1,5 @@
 package {
+    default_team: "trendy_team_native_tools_libraries",
     default_applicable_licenses: ["system_core_libcutils_license"],
 }
 
@@ -18,6 +19,17 @@ license {
 filegroup {
     name: "android_filesystem_config_header",
     srcs: ["include/private/android_filesystem_config.h"],
+}
+
+rust_bindgen {
+    name: "libandroid_ids",
+    crate_name: "android_ids",
+    source_stem: "bindings",
+    wrapper_src: "rust/aid_bindings.h",
+    header_libs: ["libcutils_headers"],
+    visibility: [
+        "//system/bpf/loader",
+    ],
 }
 
 cc_defaults {
@@ -47,6 +59,8 @@ cc_library_headers {
     defaults: ["libcutils_defaults"],
 
     export_include_dirs: ["include"],
+    header_libs: ["libprocessgroup_headers"],
+    export_header_lib_headers: ["libprocessgroup_headers"],
     target: {
         vendor: {
             override_export_include_dirs: ["include_outside_system"],
@@ -116,27 +130,6 @@ cc_library {
     },
 }
 
-cc_test {
-    name: "libcutils_sockets_test",
-    test_suites: ["device-tests"],
-    static_libs: ["libbase", "libcutils_sockets"],
-    cflags: [
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-    ],
-
-    srcs: ["sockets_test.cpp"],
-    target: {
-        android: {
-            srcs: [
-                "android_get_control_file_test.cpp",
-                "android_get_control_socket_test.cpp",
-            ],
-        },
-    },
-}
-
 // some files must not be compiled when building against Mingw
 // they correspond to features not used by our host development tools
 // which are also hard or even impossible to port to native Win32
@@ -150,10 +143,7 @@ libcutils_nonwindows_sources = [
 cc_library {
     name: "libcutils",
     defaults: ["libcutils_defaults"],
-    vndk: {
-        enabled: true,
-        support_system_process: true,
-    },
+    double_loadable: true,
     srcs: [
         "config_utils.cpp",
         "iosched_policy.cpp",
@@ -162,71 +152,50 @@ cc_library {
         "properties.cpp",
         "record_stream.cpp",
         "strlcpy.c",
-        "threads.cpp",
     ],
 
     target: {
         linux_bionic: {
             enabled: true,
+            static_libs: [
+                "libasync_safe",
+            ],
         },
-        not_windows: {
-            srcs: libcutils_nonwindows_sources + [
-                "ashmem-host.cpp",
+        linux: {
+            srcs: [
                 "canned_fs_config.cpp",
                 "fs_config.cpp",
-                "trace-host.cpp",
             ],
         },
-        windows: {
-            host_ldlibs: ["-lws2_32"],
-
+        host: {
             srcs: [
                 "trace-host.cpp",
-            ],
-
-            enabled: true,
-            cflags: [
-                "-D_GNU_SOURCE",
+                "ashmem-host.cpp",
             ],
         },
+        not_windows: {
+            srcs: libcutils_nonwindows_sources,
+        },
+        windows: {
+            enabled: true,
+            host_ldlibs: ["-lws2_32"],
+        },
         android: {
+            sanitize: {
+                misc_undefined: ["integer"],
+            },
+            static_libs: [
+                "libasync_safe",
+            ],
             srcs: libcutils_nonwindows_sources + [
                 "android_reboot.cpp",
                 "ashmem-dev.cpp",
-                "canned_fs_config.cpp",
-                "fs_config.cpp",
                 "klog.cpp",
                 "partition_utils.cpp",
                 "qtaguid.cpp",
                 "trace-dev.cpp",
                 "uevent.cpp",
             ],
-        },
-
-        android_arm: {
-            sanitize: {
-                misc_undefined: ["integer"],
-            },
-        },
-        android_arm64: {
-            sanitize: {
-                misc_undefined: ["integer"],
-            },
-        },
-
-        android_x86: {
-            // TODO: This is to work around b/29412086.
-            // Remove once __mulodi4 is available and move the "sanitize" block
-            // to the android target.
-            sanitize: {
-                misc_undefined: [],
-            },
-        },
-
-        android_x86_64: {
-            sanitize: {
-                misc_undefined: ["integer"],
-            },
         },
 
         // qtaguid.cpp loads libnetd_client.so with dlopen().  Since
@@ -236,11 +205,19 @@ cc_library {
             exclude_srcs: [
                 "qtaguid.cpp",
             ],
+            header_abi_checker: {
+                enabled: true,
+                ref_dump_dirs: ["abi-dumps"],
+            },
         },
         product: {
             exclude_srcs: [
                 "qtaguid.cpp",
             ],
+            header_abi_checker: {
+                enabled: true,
+                ref_dump_dirs: ["abi-dumps"],
+            },
         },
     },
 
@@ -270,6 +247,7 @@ cc_library {
 cc_defaults {
     name: "libcutils_test_default",
     srcs: [
+        "ashmem_base_test.cpp",
         "native_handle_test.cpp",
         "properties_test.cpp",
         "sockets_test.cpp",
@@ -303,13 +281,15 @@ cc_defaults {
     ],
 }
 
+always_static_test_libraries = [
+    "libjsoncpp",
+]
+
 test_libraries = [
     "libcutils",
     "liblog",
     "libbase",
-    "libjsoncpp",
     "libprocessgroup",
-    "libcgrouprc",
 ]
 
 cc_test {
@@ -318,26 +298,33 @@ cc_test {
     defaults: ["libcutils_test_default"],
     host_supported: true,
     shared_libs: test_libraries,
+    static_libs: always_static_test_libraries,
     require_root: true,
 }
 
 cc_defaults {
     name: "libcutils_test_static_defaults",
     defaults: ["libcutils_test_default"],
-    static_libs: [
-        "libc",
-        "libcgrouprc_format",
-    ] + test_libraries,
     stl: "libc++_static",
     require_root: true,
 
     target: {
         android: {
             static_executable: true,
+            static_libs: [
+                "libprocessgroup_util",
+            ] + test_libraries + always_static_test_libraries,
+        },
+        not_windows: {
+            static_libs: test_libraries + always_static_test_libraries,
         },
         windows: {
+            static_libs: [
+                "libbase",
+                "libcutils",
+                "libcutils_sockets",
+            ],
             host_ldlibs: ["-lws2_32"],
-
             enabled: true,
         },
     },
@@ -345,13 +332,17 @@ cc_defaults {
 
 cc_test {
     name: "libcutils_test_static",
+    host_supported: true,
     test_suites: ["device-tests"],
     defaults: ["libcutils_test_static_defaults"],
 }
 
 cc_test {
     name: "KernelLibcutilsTest",
-    test_suites: ["general-tests", "vts"],
+    test_suites: [
+        "general-tests",
+        "vts",
+    ],
     defaults: ["libcutils_test_static_defaults"],
     test_config: "KernelLibcutilsTest.xml",
 }

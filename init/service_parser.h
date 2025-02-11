@@ -18,7 +18,6 @@
 
 #include <vector>
 
-#include "interface_utils.h"
 #include "parser.h"
 #include "service.h"
 #include "service_list.h"
@@ -29,13 +28,8 @@ namespace init {
 
 class ServiceParser : public SectionParser {
   public:
-    ServiceParser(
-            ServiceList* service_list, Subcontext* subcontext,
-            const std::optional<InterfaceInheritanceHierarchyMap>& interface_inheritance_hierarchy)
-        : service_list_(service_list),
-          subcontext_(subcontext),
-          interface_inheritance_hierarchy_(interface_inheritance_hierarchy),
-          service_(nullptr) {}
+    ServiceParser(ServiceList* service_list, Subcontext* subcontext)
+        : service_list_(service_list), subcontext_(subcontext), service_(nullptr) {}
     Result<void> ParseSection(std::vector<std::string>&& args, const std::string& filename,
                               int line) override;
     Result<void> ParseLineSection(std::vector<std::string>&& args, int line) override;
@@ -53,6 +47,7 @@ class ServiceParser : public SectionParser {
     Result<void> ParseDisabled(std::vector<std::string>&& args);
     Result<void> ParseEnterNamespace(std::vector<std::string>&& args);
     Result<void> ParseGroup(std::vector<std::string>&& args);
+    Result<void> ParseGentleKill(std::vector<std::string>&& args);
     Result<void> ParsePriority(std::vector<std::string>&& args);
     Result<void> ParseInterface(std::vector<std::string>&& args);
     Result<void> ParseIoprio(std::vector<std::string>&& args);
@@ -72,6 +67,7 @@ class ServiceParser : public SectionParser {
     Result<void> ParseRestartPeriod(std::vector<std::string>&& args);
     Result<void> ParseSeclabel(std::vector<std::string>&& args);
     Result<void> ParseSetenv(std::vector<std::string>&& args);
+    Result<void> ParseSharedKallsyms(std::vector<std::string>&& args);
     Result<void> ParseShutdown(std::vector<std::string>&& args);
     Result<void> ParseSigstop(std::vector<std::string>&& args);
     Result<void> ParseSocket(std::vector<std::string>&& args);
@@ -87,7 +83,6 @@ class ServiceParser : public SectionParser {
 
     ServiceList* service_list_;
     Subcontext* subcontext_;
-    std::optional<InterfaceInheritanceHierarchyMap> interface_inheritance_hierarchy_;
     std::unique_ptr<Service> service_;
     std::string filename_;
 };

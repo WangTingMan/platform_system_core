@@ -36,6 +36,7 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/swap.h>
 #include <sys/syscall.h>
 #include <sys/system_properties.h>
 #include <sys/time.h>
@@ -46,7 +47,6 @@
 #include <map>
 #include <memory>
 
-#include <InitProperties.sysprop.h>
 #include <android-base/chrono_utils.h>
 #include <android-base/file.h>
 #include <android-base/logging.h>
@@ -60,6 +60,8 @@
 #include <cutils/android_reboot.h>
 #include <fs_mgr.h>
 #include <fscrypt/fscrypt.h>
+#include <libdm/dm.h>
+#include <libdm/loop_control.h>
 #include <libgsi/libgsi.h>
 #include <logwrap/logwrap.h>
 #include <private/android_filesystem_config.h>
@@ -69,6 +71,7 @@
 #include <system/thread_defs.h>
 
 #include "action_manager.h"
+#include "apex_init_util.h"
 #include "bootchart.h"
 #include "builtin_arguments.h"
 #include "fscrypt_init_extensions.h"
@@ -330,13 +333,13 @@ static Result<void> do_ifup(const BuiltinArguments& args) {
     unique_fd s(TEMP_FAILURE_RETRY(socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)));
     if (s < 0) return ErrnoError() << "opening socket failed";
 
-    if (ioctl(s, SIOCGIFFLAGS, &ifr) < 0) {
+    if (ioctl(s.get(), SIOCGIFFLAGS, &ifr) < 0) {
         return ErrnoError() << "ioctl(..., SIOCGIFFLAGS, ...) failed";
     }
 
     ifr.ifr_flags |= IFF_UP;
 
-    if (ioctl(s, SIOCSIFFLAGS, &ifr) < 0) {
+    if (ioctl(s.get(), SIOCSIFFLAGS, &ifr) < 0) {
         return ErrnoError() << "ioctl(..., SIOCSIFFLAGS, ...) failed";
     }
 
@@ -468,11 +471,10 @@ static struct {
     { "private",    MS_PRIVATE },
     { "slave",      MS_SLAVE },
     { "shared",     MS_SHARED },
+    { "nosymfollow", MS_NOSYMFOLLOW },
     { "defaults",   0 },
     { 0,            0 },
 };
-
-#define DATA_MNT_POINT "/data"
 
 /* mount <type> <device> <path> <flags ...> <options> */
 static Result<void> do_mount(const BuiltinArguments& args) {
@@ -505,29 +507,29 @@ static Result<void> do_mount(const BuiltinArguments& args) {
 
     if (android::base::StartsWith(source, "loop@")) {
         int mode = (flags & MS_RDONLY) ? O_RDONLY : O_RDWR;
-        unique_fd fd(TEMP_FAILURE_RETRY(open(source + 5, mode | O_CLOEXEC)));
-        if (fd < 0) return ErrnoError() << "open(" << source + 5 << ", " << mode << ") failed";
+        const char* file_path = source + strlen("loop@");
 
-        for (size_t n = 0;; n++) {
-            std::string tmp = android::base::StringPrintf("/dev/block/loop%zu", n);
-            unique_fd loop(TEMP_FAILURE_RETRY(open(tmp.c_str(), mode | O_CLOEXEC)));
-            if (loop < 0) return ErrnoError() << "open(" << tmp << ", " << mode << ") failed";
-
-            loop_info info;
-            /* if it is a blank loop device */
-            if (ioctl(loop, LOOP_GET_STATUS, &info) < 0 && errno == ENXIO) {
-                /* if it becomes our loop device */
-                if (ioctl(loop, LOOP_SET_FD, fd.get()) >= 0) {
-                    if (mount(tmp.c_str(), target, system, flags, options) < 0) {
-                        ioctl(loop, LOOP_CLR_FD, 0);
-                        return ErrnoError() << "mount() failed";
-                    }
-                    return {};
-                }
-            }
+        // Open source file
+        if (wait) {
+            wait_for_file(file_path, kCommandRetryTimeout);
         }
 
-        return Error() << "out of loopback devices";
+        unique_fd fd(TEMP_FAILURE_RETRY(open(file_path, mode | O_CLOEXEC)));
+        if (fd < 0) {
+            return ErrnoError() << "open(" << file_path << ", " << mode << ") failed";
+        }
+
+        // Allocate loop device and attach it to file_path.
+        android::dm::LoopControl loop_control;
+        std::string loop_device;
+        if (!loop_control.Attach(fd.get(), 5s, &loop_device)) {
+            return ErrnoError() << "loop_control.Attach " << file_path << " failed";
+        }
+
+        if (mount(loop_device.c_str(), target, system, flags, options) < 0) {
+            loop_control.Detach(loop_device);
+            return ErrnoError() << "mount() failed";
+        }
     } else {
         if (wait)
             wait_for_file(source, kCommandRetryTimeout);
@@ -574,7 +576,7 @@ static void import_late(const std::vector<std::string>& rc_paths) {
  *
  * return code is processed based on input code
  */
-static Result<void> queue_fs_event(int code, bool userdata_remount) {
+static Result<void> queue_fs_event(int code) {
     if (code == FS_MGR_MNTALL_DEV_NOT_ENCRYPTABLE) {
         SetProperty("ro.crypto.state", "unsupported");
         ActionManager::GetInstance().QueueEventTrigger("nonencrypted");
@@ -588,30 +590,9 @@ static Result<void> queue_fs_event(int code, bool userdata_remount) {
         const std::vector<std::string> options = {"--wipe_data", "--reason=fs_mgr_mount_all" };
         return reboot_into_recovery(options);
         /* If reboot worked, there is no return. */
-    } else if (code == FS_MGR_MNTALL_DEV_FILE_ENCRYPTED) {
-        if (!FscryptInstallKeyring()) {
-            return Error() << "FscryptInstallKeyring() failed";
-        }
-        SetProperty("ro.crypto.state", "encrypted");
-
-        // Although encrypted, we have device key, so we do not need to
-        // do anything different from the nonencrypted case.
-        ActionManager::GetInstance().QueueEventTrigger("nonencrypted");
-        return {};
-    } else if (code == FS_MGR_MNTALL_DEV_IS_METADATA_ENCRYPTED) {
-        if (!FscryptInstallKeyring()) {
-            return Error() << "FscryptInstallKeyring() failed";
-        }
-        SetProperty("ro.crypto.state", "encrypted");
-
-        // Although encrypted, vold has already set the device up, so we do not need to
-        // do anything different from the nonencrypted case.
-        ActionManager::GetInstance().QueueEventTrigger("nonencrypted");
-        return {};
-    } else if (code == FS_MGR_MNTALL_DEV_NEEDS_METADATA_ENCRYPTION) {
-        if (!FscryptInstallKeyring()) {
-            return Error() << "FscryptInstallKeyring() failed";
-        }
+    } else if (code == FS_MGR_MNTALL_DEV_FILE_ENCRYPTED ||
+               code == FS_MGR_MNTALL_DEV_IS_METADATA_ENCRYPTED ||
+               code == FS_MGR_MNTALL_DEV_NEEDS_METADATA_ENCRYPTION) {
         SetProperty("ro.crypto.state", "encrypted");
 
         // Although encrypted, vold has already set the device up, so we do not need to
@@ -625,8 +606,6 @@ static Result<void> queue_fs_event(int code, bool userdata_remount) {
 
     return Error() << "Invalid code: " << code;
 }
-
-static int initial_mount_fstab_return_code = -1;
 
 /* <= Q: mount_all <fstab> [ <path> ]* [--<options>]*
  * >= R: mount_all [ <fstab> ] [--<options>]*
@@ -668,19 +647,10 @@ static Result<void> do_mount_all(const BuiltinArguments& args) {
         import_late(mount_all->rc_paths);
     }
 
-    if (mount_fstab_result.userdata_mounted) {
-        // This call to fs_mgr_mount_all mounted userdata. Keep the result in
-        // order for userspace reboot to correctly remount userdata.
-        LOG(INFO) << "Userdata mounted using "
-                  << (mount_all->fstab_path.empty() ? "(default fstab)" : mount_all->fstab_path)
-                  << " result : " << mount_fstab_result.code;
-        initial_mount_fstab_return_code = mount_fstab_result.code;
-    }
-
     if (queue_event) {
         /* queue_fs_event will queue event based on mount_fstab return code
          * and return processed return code*/
-        auto queue_fs_result = queue_fs_event(mount_fstab_result.code, false);
+        auto queue_fs_result = queue_fs_event(mount_fstab_result);
         if (!queue_fs_result.ok()) {
             return Error() << "queue_fs_event() failed: " << queue_fs_result.error();
         }
@@ -761,6 +731,7 @@ static Result<void> do_setrlimit(const BuiltinArguments& args) {
 static Result<void> do_start(const BuiltinArguments& args) {
     Service* svc = ServiceList::GetInstance().FindService(args[1]);
     if (!svc) return Error() << "service " << args[1] << " not found";
+    errno = 0;
     if (auto result = svc->Start(); !result.ok()) {
         return ErrorIgnoreEnoent() << "Could not start service: " << result.error();
     }
@@ -878,6 +849,8 @@ static Result<void> do_verity_update_state(const BuiltinArguments& args) {
             SetProperty("partition." + partition + ".verified.hash_alg", hashtree_info->algorithm);
             SetProperty("partition." + partition + ".verified.root_digest",
                         hashtree_info->root_digest);
+            SetProperty("partition." + partition + ".verified.check_at_most_once",
+                        hashtree_info->check_at_most_once ? "1" : "0");
         }
     }
 
@@ -898,16 +871,16 @@ static Result<void> readahead_file(const std::string& filename, bool fully) {
     if (fd == -1) {
         return ErrnoError() << "Error opening file";
     }
-    if (posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED)) {
+    if (posix_fadvise(fd.get(), 0, 0, POSIX_FADV_WILLNEED)) {
         return ErrnoError() << "Error posix_fadvise file";
     }
-    if (readahead(fd, 0, std::numeric_limits<size_t>::max())) {
+    if (readahead(fd.get(), 0, std::numeric_limits<size_t>::max())) {
         return ErrnoError() << "Error readahead file";
     }
     if (fully) {
         char buf[BUFSIZ];
         ssize_t n;
-        while ((n = TEMP_FAILURE_RETRY(read(fd, &buf[0], sizeof(buf)))) > 0) {
+        while ((n = TEMP_FAILURE_RETRY(read(fd.get(), &buf[0], sizeof(buf)))) > 0) {
         }
         if (n != 0) {
             return ErrnoError() << "Error reading file";
@@ -1071,7 +1044,7 @@ static Result<void> do_restorecon(const BuiltinArguments& args) {
 static Result<void> do_restorecon_recursive(const BuiltinArguments& args) {
     std::vector<std::string> non_const_args(args.args);
     non_const_args.insert(std::next(non_const_args.begin()), "--recursive");
-    return do_restorecon({std::move(non_const_args), args.context});
+    return do_restorecon({.args = std::move(non_const_args), .context = args.context});
 }
 
 static Result<void> do_loglevel(const BuiltinArguments& args) {
@@ -1165,57 +1138,24 @@ static Result<void> ExecWithFunctionOnFailure(const std::vector<std::string>& ar
 }
 
 static Result<void> ExecVdcRebootOnFailure(const std::string& vdc_arg) {
-    bool should_reboot_into_recovery = true;
     auto reboot_reason = vdc_arg + "_failed";
-    if (android::sysprop::InitProperties::userspace_reboot_in_progress().value_or(false)) {
-        should_reboot_into_recovery = false;
-        reboot_reason = "userspace_failed," + vdc_arg;
-    }
 
-    auto reboot = [reboot_reason, should_reboot_into_recovery](const std::string& message) {
+    auto reboot = [reboot_reason](const std::string& message) {
         // TODO (b/122850122): support this in gsi
-        if (should_reboot_into_recovery) {
-            if (IsFbeEnabled() && !android::gsi::IsGsiRunning()) {
-                LOG(ERROR) << message << ": Rebooting into recovery, reason: " << reboot_reason;
-                if (auto result = reboot_into_recovery(
-                            {"--prompt_and_wipe_data", "--reason="s + reboot_reason});
-                    !result.ok()) {
-                    LOG(FATAL) << "Could not reboot into recovery: " << result.error();
-                }
-            } else {
-                LOG(ERROR) << "Failure (reboot suppressed): " << reboot_reason;
+        if (IsFbeEnabled() && !android::gsi::IsGsiRunning()) {
+            LOG(ERROR) << message << ": Rebooting into recovery, reason: " << reboot_reason;
+            if (auto result = reboot_into_recovery(
+                        {"--prompt_and_wipe_data", "--reason="s + reboot_reason});
+                !result.ok()) {
+                LOG(FATAL) << "Could not reboot into recovery: " << result.error();
             }
         } else {
-            LOG(ERROR) << message << ": rebooting, reason: " << reboot_reason;
-            trigger_shutdown("reboot," + reboot_reason);
+            LOG(ERROR) << "Failure (reboot suppressed): " << reboot_reason;
         }
     };
 
     std::vector<std::string> args = {"exec", "/system/bin/vdc", "--wait", "cryptfs", vdc_arg};
     return ExecWithFunctionOnFailure(args, reboot);
-}
-
-static Result<void> do_remount_userdata(const BuiltinArguments& args) {
-    if (initial_mount_fstab_return_code == -1) {
-        return Error() << "Calling remount_userdata too early";
-    }
-    Fstab fstab;
-    if (!ReadDefaultFstab(&fstab)) {
-        // TODO(b/135984674): should we reboot here?
-        return Error() << "Failed to read fstab";
-    }
-    // TODO(b/135984674): check that fstab contains /data.
-    if (auto rc = fs_mgr_remount_userdata_into_checkpointing(&fstab); rc < 0) {
-        std::string proc_mounts_output;
-        android::base::ReadFileToString("/proc/mounts", &proc_mounts_output, true);
-        android::base::WriteStringToFile(proc_mounts_output,
-                                         "/metadata/userspacereboot/mount_info.txt");
-        trigger_shutdown("reboot,mount_userdata_failed");
-    }
-    if (auto result = queue_fs_event(initial_mount_fstab_return_code, true); !result.ok()) {
-        return Error() << "queue_fs_event() failed: " << result.error();
-    }
-    return {};
 }
 
 static Result<void> do_installkey(const BuiltinArguments& args) {
@@ -1233,8 +1173,7 @@ static Result<void> do_init_user0(const BuiltinArguments& args) {
 }
 
 static Result<void> do_mark_post_data(const BuiltinArguments& args) {
-    ServiceList::GetInstance().MarkPostData();
-
+    LOG(INFO) << "deprecated action `mark_post_data` called.";
     return {};
 }
 
@@ -1279,81 +1218,36 @@ static Result<void> do_update_linker_config(const BuiltinArguments&) {
     return GenerateLinkerConfiguration();
 }
 
-static Result<void> parse_apex_configs() {
-    glob_t glob_result;
-    static constexpr char glob_pattern[] = "/apex/*/etc/*rc";
-    const int ret = glob(glob_pattern, GLOB_MARK, nullptr, &glob_result);
-    if (ret != 0 && ret != GLOB_NOMATCH) {
-        globfree(&glob_result);
-        return Error() << "glob pattern '" << glob_pattern << "' failed";
-    }
-    std::vector<std::string> configs;
-    Parser parser =
-            CreateApexConfigParser(ActionManager::GetInstance(), ServiceList::GetInstance());
-    for (size_t i = 0; i < glob_result.gl_pathc; i++) {
-        std::string path = glob_result.gl_pathv[i];
-        // Filter-out /apex/<name>@<ver> paths. The paths are bind-mounted to
-        // /apex/<name> paths, so unless we filter them out, we will parse the
-        // same file twice.
-        std::vector<std::string> paths = android::base::Split(path, "/");
-        if (paths.size() >= 3 && paths[2].find('@') != std::string::npos) {
-            continue;
-        }
-        // Filter directories
-        if (path.back() == '/') {
-            continue;
-        }
-        configs.push_back(path);
-    }
-    globfree(&glob_result);
-
-    int active_sdk = android::base::GetIntProperty("ro.build.version.sdk", INT_MAX);
-
-    bool success = true;
-    for (const auto& c : parser.FilterVersionedConfigs(configs, active_sdk)) {
-        success &= parser.ParseConfigFile(c);
-    }
-    ServiceList::GetInstance().MarkServicesUpdate();
-    if (success) {
-        return {};
-    } else {
-        return Error() << "Could not parse apex configs";
-    }
-}
-
 /*
  * Creates a directory under /data/misc/apexdata/ for each APEX.
  */
-static Result<void> create_apex_data_dirs() {
-    auto dirp = std::unique_ptr<DIR, int (*)(DIR*)>(opendir("/apex"), closedir);
-    if (!dirp) {
-        return ErrnoError() << "Unable to open apex directory";
-    }
-    struct dirent* entry;
-    while ((entry = readdir(dirp.get())) != nullptr) {
-        if (entry->d_type != DT_DIR) continue;
-
-        const char* name = entry->d_name;
-        // skip any starting with "."
-        if (name[0] == '.') continue;
-
-        if (strchr(name, '@') != nullptr) continue;
-
-        auto path = "/data/misc/apexdata/" + std::string(name);
+static void create_apex_data_dirs() {
+    for (const auto& name : GetApexListFrom("/apex")) {
+        auto path = "/data/misc/apexdata/" + name;
         auto options = MkdirOptions{path, 0771, AID_ROOT, AID_SYSTEM, FscryptAction::kNone, "ref"};
-        make_dir_with_options(options);
+        auto result = make_dir_with_options(options);
+        if (!result.ok()) {
+            LOG(ERROR) << result.error();
+        }
     }
-    return {};
 }
 
 static Result<void> do_perform_apex_config(const BuiltinArguments& args) {
-    auto create_dirs = create_apex_data_dirs();
-    if (!create_dirs.ok()) {
-        return create_dirs.error();
+    bool bootstrap = false;
+    if (args.size() == 2) {
+        if (args[1] != "--bootstrap") {
+            return Error() << "Unexpected argument: " << args[1];
+        }
+        bootstrap = true;
     }
-    auto parse_configs = parse_apex_configs();
-    if (!parse_configs.ok()) {
-        return parse_configs.error();
+
+    if (!bootstrap) {
+        create_apex_data_dirs();
+    }
+
+    auto parse_result = ParseRcScriptsFromAllApexes(bootstrap);
+    if (!parse_result.ok()) {
+        return parse_result.error();
     }
 
     auto update_linker_config = do_update_linker_config(args);
@@ -1361,6 +1255,9 @@ static Result<void> do_perform_apex_config(const BuiltinArguments& args) {
         return update_linker_config.error();
     }
 
+    if (!bootstrap) {
+        ServiceList::GetInstance().StartDelayedServices();
+    }
     return {};
 }
 
@@ -1372,6 +1269,13 @@ static Result<void> do_enter_default_mount_ns(const BuiltinArguments& args) {
         return result.error();
     }
     LOG(INFO) << "Switched to default mount namespace";
+    return {};
+}
+
+static Result<void> do_swapoff(const BuiltinArguments& args) {
+    if (!swapoff(args[1].c_str())) {
+        return ErrnoError() << "swapoff() failed";
+    }
     return {};
 }
 
@@ -1415,12 +1319,11 @@ const BuiltinFunctionMap& GetBuiltinFunctionMap() {
         // mount and umount are run in the same context as mount_all for symmetry.
         {"mount_all",               {0,     kMax, {false,  do_mount_all}}},
         {"mount",                   {3,     kMax, {false,  do_mount}}},
-        {"perform_apex_config",     {0,     0,    {false,  do_perform_apex_config}}},
+        {"perform_apex_config",     {0,     1,    {false,  do_perform_apex_config}}},
         {"umount",                  {1,     1,    {false,  do_umount}}},
         {"umount_all",              {0,     1,    {false,  do_umount_all}}},
         {"update_linker_config",    {0,     0,    {false,  do_update_linker_config}}},
         {"readahead",               {1,     2,    {true,   do_readahead}}},
-        {"remount_userdata",        {0,     0,    {false,  do_remount_userdata}}},
         {"restart",                 {1,     2,    {false,  do_restart}}},
         {"restorecon",              {1,     kMax, {true,   do_restorecon}}},
         {"restorecon_recursive",    {1,     kMax, {true,   do_restorecon_recursive}}},
@@ -1431,6 +1334,7 @@ const BuiltinFunctionMap& GetBuiltinFunctionMap() {
         {"start",                   {1,     1,    {false,  do_start}}},
         {"stop",                    {1,     1,    {false,  do_stop}}},
         {"swapon_all",              {0,     1,    {false,  do_swapon_all}}},
+        {"swapoff",                 {1,     1,    {false,  do_swapoff}}},
         {"enter_default_mount_ns",  {0,     0,    {false,  do_enter_default_mount_ns}}},
         {"symlink",                 {2,     2,    {true,   do_symlink}}},
         {"sysclktz",                {1,     1,    {false,  do_sysclktz}}},

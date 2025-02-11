@@ -30,6 +30,7 @@ namespace android {
 namespace fiemap {
 
 using namespace android::fs_mgr;
+using android::base::unique_fd;
 
 static constexpr uint32_t kMaxMetadataSize = 256 * 1024;
 
@@ -109,10 +110,12 @@ bool SaveMetadata(MetadataBuilder* builder, const std::string& metadata_dir) {
     if (exported->partitions.empty() && android::base::RemoveFileIfExists(metadata_file)) {
         return true;
     }
+
     if (!WriteToImageFile(metadata_file, *exported.get())) {
         LOG(ERROR) << "Unable to save new metadata";
         return false;
     }
+
     return true;
 }
 

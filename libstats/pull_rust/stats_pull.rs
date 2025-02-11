@@ -14,13 +14,12 @@
 
 //! A Rust interface for the StatsD pull API.
 
-use lazy_static::lazy_static;
 use statslog_rust_header::{Atoms, Stat, StatsError};
 use statspull_bindgen::*;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::os::raw::c_void;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 /// The return value of callbacks.
 pub type StatsPullResult = Vec<Box<dyn Stat>>;
@@ -107,11 +106,12 @@ impl Default for Metadata {
     }
 }
 
-lazy_static! {
-    static ref COOKIES: Mutex<HashMap<i32, fn() -> StatsPullResult>> = Mutex::new(HashMap::new());
-}
+static COOKIES: LazyLock<Mutex<HashMap<i32, fn() -> StatsPullResult>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
-// Safety: We store our callbacks in the global so they are valid.
+/// # Safety
+///
+/// `data` must be a valid pointer with no aliases.
 unsafe extern "C" fn callback_wrapper(
     atom_tag: i32,
     data: *mut AStatsEventList,
@@ -126,7 +126,8 @@ unsafe extern "C" fn callback_wrapper(
                 let stats = cb();
                 let result = stats
                     .iter()
-                    .map(|stat| stat.add_astats_event(&mut *data))
+                    // Safety: The caller promises that `data` is valid and unaliased.
+                    .map(|stat| stat.add_astats_event(unsafe { &mut *data }))
                     .collect::<Result<Vec<()>, StatsError>>();
                 match result {
                     Ok(_) => {

@@ -15,6 +15,7 @@
 //
 
 package {
+    default_team: "trendy_team_android_kernel",
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
@@ -71,6 +72,9 @@ cc_defaults {
         "libbase",
         "liblog",
     ],
+    header_libs: [
+        "libstorage_literals_headers",
+    ],
     srcs: [":libdm_test_srcs"],
     auto_gen_config: true,
     require_root: true,
@@ -89,20 +93,4 @@ cc_test {
     test_options: {
         min_shipping_api_level: 29,
     },
-}
-
-cc_fuzz {
-    name: "dm_linear_table_fuzzer",
-    defaults: ["fs_mgr_defaults"],
-    srcs: [
-        "dm_linear_fuzzer.cpp",
-        "test_util.cpp",
-    ],
-    static_libs: [
-        "libdm",
-        "libbase",
-        "libext2_uuid",
-        "libfs_mgr",
-        "liblog",
-    ],
 }

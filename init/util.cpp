@@ -27,9 +27,11 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
+#include <map>
 #include <thread>
 
 #include <android-base/file.h>
@@ -40,6 +42,10 @@
 #include <android-base/unique_fd.h>
 #include <cutils/sockets.h>
 #include <selinux/android.h>
+
+#if defined(__ANDROID__)
+#include <fs_mgr.h>
+#endif
 
 #ifdef INIT_FULL_SOURCES
 #include <android/api-level.h>
@@ -58,8 +64,6 @@ using namespace std::literals::string_literals;
 
 namespace android {
 namespace init {
-
-const std::string kDefaultAndroidDtDir("/proc/device-tree/firmware/android/");
 
 const std::string kDataDirPrefix("/data/");
 
@@ -88,8 +92,8 @@ Result<uid_t> DecodeUid(const std::string& name) {
  * daemon. We communicate the file descriptor's value via the environment
  * variable ANDROID_SOCKET_ENV_PREFIX<name> ("ANDROID_SOCKET_foo").
  */
-Result<int> CreateSocket(const std::string& name, int type, bool passcred, mode_t perm, uid_t uid,
-                         gid_t gid, const std::string& socketcon) {
+Result<int> CreateSocket(const std::string& name, int type, bool passcred, bool should_listen,
+                         mode_t perm, uid_t uid, gid_t gid, const std::string& socketcon) {
     if (!socketcon.empty()) {
         if (setsockcreatecon(socketcon.c_str()) == -1) {
             return ErrnoError() << "setsockcreatecon(\"" << socketcon << "\") failed";
@@ -119,12 +123,12 @@ Result<int> CreateSocket(const std::string& name, int type, bool passcred, mode_
 
     if (passcred) {
         int on = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &on, sizeof(on))) {
+        if (setsockopt(fd.get(), SOL_SOCKET, SO_PASSCRED, &on, sizeof(on))) {
             return ErrnoError() << "Failed to set SO_PASSCRED '" << name << "'";
         }
     }
 
-    int ret = bind(fd, (struct sockaddr *) &addr, sizeof (addr));
+    int ret = bind(fd.get(), (struct sockaddr*)&addr, sizeof(addr));
     int savederrno = errno;
 
     if (!secontext.empty()) {
@@ -143,6 +147,9 @@ Result<int> CreateSocket(const std::string& name, int type, bool passcred, mode_
     }
     if (fchmodat(AT_FDCWD, addr.sun_path, perm, AT_SYMLINK_NOFOLLOW)) {
         return ErrnoError() << "Failed to fchmodat socket '" << addr.sun_path << "'";
+    }
+    if (should_listen && listen(fd.get(), /* use OS maximum */ 1 << 30)) {
+        return ErrnoError() << "Failed to listen on socket '" << addr.sun_path << "'";
     }
 
     LOG(INFO) << "Created socket '" << addr.sun_path << "'"
@@ -164,7 +171,7 @@ Result<std::string> ReadFile(const std::string& path) {
     // For security reasons, disallow world-writable
     // or group-writable files.
     struct stat sb;
-    if (fstat(fd, &sb) == -1) {
+    if (fstat(fd.get(), &sb) == -1) {
         return ErrnoError() << "fstat failed()";
     }
     if ((sb.st_mode & (S_IWGRP | S_IWOTH)) != 0) {
@@ -234,33 +241,6 @@ int wait_for_file(const char* filename, std::chrono::nanoseconds timeout) {
     }
     LOG(WARNING) << "wait for '" << filename << "' timed out and took " << t;
     return -1;
-}
-
-void ImportKernelCmdline(const std::function<void(const std::string&, const std::string&)>& fn) {
-    std::string cmdline;
-    android::base::ReadFileToString("/proc/cmdline", &cmdline);
-
-    for (const auto& entry : android::base::Split(android::base::Trim(cmdline), " ")) {
-        std::vector<std::string> pieces = android::base::Split(entry, "=");
-        if (pieces.size() == 2) {
-            fn(pieces[0], pieces[1]);
-        }
-    }
-}
-
-void ImportBootconfig(const std::function<void(const std::string&, const std::string&)>& fn) {
-    std::string bootconfig;
-    android::base::ReadFileToString("/proc/bootconfig", &bootconfig);
-
-    for (const auto& entry : android::base::Split(bootconfig, "\n")) {
-        std::vector<std::string> pieces = android::base::Split(entry, "=");
-        if (pieces.size() == 2) {
-            // get rid of the extra space between a list of values and remove the quotes.
-            std::string value = android::base::StringReplace(pieces[1], "\", \"", ",", true);
-            value.erase(std::remove(value.begin(), value.end(), '"'), value.end());
-            fn(android::base::Trim(pieces[0]), android::base::Trim(value));
-        }
-    }
 }
 
 bool make_dir(const std::string& path, mode_t mode) {
@@ -371,45 +351,18 @@ Result<std::string> ExpandProps(const std::string& src) {
     return dst;
 }
 
-static std::string init_android_dt_dir() {
-    // Use the standard procfs-based path by default
-    std::string android_dt_dir = kDefaultAndroidDtDir;
-    // The platform may specify a custom Android DT path in kernel cmdline
-    ImportKernelCmdline([&](const std::string& key, const std::string& value) {
-        if (key == "androidboot.android_dt_dir") {
-            android_dt_dir = value;
-        }
-    });
-    // ..Or bootconfig
-    if (android_dt_dir == kDefaultAndroidDtDir) {
-        ImportBootconfig([&](const std::string& key, const std::string& value) {
-            if (key == "androidboot.android_dt_dir") {
-                android_dt_dir = value;
-            }
-        });
-    }
-
-    LOG(INFO) << "Using Android DT directory " << android_dt_dir;
-    return android_dt_dir;
-}
-
-// FIXME: The same logic is duplicated in system/core/fs_mgr/
-const std::string& get_android_dt_dir() {
-    // Set once and saves time for subsequent calls to this function
-    static const std::string kAndroidDtDir = init_android_dt_dir();
-    return kAndroidDtDir;
-}
-
 // Reads the content of device tree file under the platform's Android DT directory.
 // Returns true if the read is success, false otherwise.
 bool read_android_dt_file(const std::string& sub_path, std::string* dt_content) {
-    const std::string file_name = get_android_dt_dir() + sub_path;
+#if defined(__ANDROID__)
+    const std::string file_name = android::fs_mgr::GetAndroidDtDir() + sub_path;
     if (android::base::ReadFileToString(file_name, dt_content)) {
         if (!dt_content->empty()) {
             dt_content->pop_back();  // Trims the trailing '\0' out.
             return true;
         }
     }
+#endif
     return false;
 }
 
@@ -617,6 +570,8 @@ Result<std::pair<int, std::vector<std::string>>> ParseRestorecon(
             {"--recursive", SELINUX_ANDROID_RESTORECON_RECURSE},
             {"--skip-ce", SELINUX_ANDROID_RESTORECON_SKIPCE},
             {"--cross-filesystems", SELINUX_ANDROID_RESTORECON_CROSS_FILESYSTEMS},
+            {"--force", SELINUX_ANDROID_RESTORECON_FORCE},
+            {"--data-data", SELINUX_ANDROID_RESTORECON_DATADATA},
             {0, 0}};
 
     int flag = 0;
@@ -728,11 +683,6 @@ void SetDefaultMountNamespaceReady() {
     is_default_mount_namespace_ready = true;
 }
 
-bool IsMicrodroid() {
-    static bool is_microdroid = android::base::GetProperty("ro.hardware", "") == "microdroid";
-    return is_microdroid;
-}
-
 bool Has32BitAbi() {
     static bool has = !android::base::GetProperty("ro.product.cpu.abilist32", "").empty();
     return has;
@@ -746,6 +696,149 @@ std::string GetApexNameFromFileName(const std::string& path) {
         return path.substr(begin, end - begin);
     }
     return "";
+}
+
+std::vector<std::string> FilterVersionedConfigs(const std::vector<std::string>& configs,
+                                                int active_sdk) {
+    std::vector<std::string> filtered_configs;
+
+    std::map<std::string, std::pair<std::string, int>> script_map;
+    for (const auto& c : configs) {
+        int sdk = 0;
+        const std::vector<std::string> parts = android::base::Split(c, ".");
+        std::string base;
+        if (parts.size() < 2) {
+            continue;
+        }
+
+        // parts[size()-1], aka the suffix, should be "rc" or "#rc"
+        // any other pattern gets discarded
+
+        const auto& suffix = parts[parts.size() - 1];
+        if (suffix == "rc") {
+            sdk = 0;
+        } else {
+            char trailer[9] = {0};
+            int r = sscanf(suffix.c_str(), "%d%8s", &sdk, trailer);
+            if (r != 2) {
+                continue;
+            }
+            if (strlen(trailer) > 2 || strcmp(trailer, "rc") != 0) {
+                continue;
+            }
+        }
+
+        if (sdk < 0 || sdk > active_sdk) {
+            continue;
+        }
+
+        base = parts[0];
+        for (unsigned int i = 1; i < parts.size() - 1; i++) {
+            base = base + "." + parts[i];
+        }
+
+        // is this preferred over what we already have
+        auto it = script_map.find(base);
+        if (it == script_map.end() || it->second.second < sdk) {
+            script_map[base] = std::make_pair(c, sdk);
+        }
+    }
+
+    for (const auto& m : script_map) {
+        filtered_configs.push_back(m.second.first);
+    }
+    return filtered_configs;
+}
+
+// Forks, executes the provided program in the child, and waits for the completion in the parent.
+// Child's stderr is captured and logged using LOG(ERROR).
+bool ForkExecveAndWaitForCompletion(const char* filename, char* const argv[]) {
+    // Create a pipe used for redirecting child process's output.
+    // * pipe_fds[0] is the FD the parent will use for reading.
+    // * pipe_fds[1] is the FD the child will use for writing.
+    int pipe_fds[2];
+    if (pipe(pipe_fds) == -1) {
+        PLOG(ERROR) << "Failed to create pipe";
+        return false;
+    }
+
+    pid_t child_pid = fork();
+    if (child_pid == -1) {
+        PLOG(ERROR) << "Failed to fork for " << filename;
+        return false;
+    }
+
+    if (child_pid == 0) {
+        // fork succeeded -- this is executing in the child process
+
+        // Close the pipe FD not used by this process
+        close(pipe_fds[0]);
+
+        // Redirect stderr to the pipe FD provided by the parent
+        if (TEMP_FAILURE_RETRY(dup2(pipe_fds[1], STDERR_FILENO)) == -1) {
+            PLOG(ERROR) << "Failed to redirect stderr of " << filename;
+            _exit(127);
+            return false;
+        }
+        close(pipe_fds[1]);
+
+        if (execv(filename, argv) == -1) {
+            PLOG(ERROR) << "Failed to execve " << filename;
+            return false;
+        }
+        // Unreachable because execve will have succeeded and replaced this code
+        // with child process's code.
+        _exit(127);
+        return false;
+    } else {
+        // fork succeeded -- this is executing in the original/parent process
+
+        // Close the pipe FD not used by this process
+        close(pipe_fds[1]);
+
+        // Log the redirected output of the child process.
+        // It's unfortunate that there's no standard way to obtain an istream for a file descriptor.
+        // As a result, we're buffering all output and logging it in one go at the end of the
+        // invocation, instead of logging it as it comes in.
+        const int child_out_fd = pipe_fds[0];
+        std::string child_output;
+        if (!android::base::ReadFdToString(child_out_fd, &child_output)) {
+            PLOG(ERROR) << "Failed to capture full output of " << filename;
+        }
+        close(child_out_fd);
+        if (!child_output.empty()) {
+            // Log captured output, line by line, because LOG expects to be invoked for each line
+            std::istringstream in(child_output);
+            std::string line;
+            while (std::getline(in, line)) {
+                LOG(ERROR) << filename << ": " << line;
+            }
+        }
+
+        // Wait for child to terminate
+        int status;
+        if (TEMP_FAILURE_RETRY(waitpid(child_pid, &status, 0)) != child_pid) {
+            PLOG(ERROR) << "Failed to wait for " << filename;
+            return false;
+        }
+
+        if (WIFEXITED(status)) {
+            int status_code = WEXITSTATUS(status);
+            if (status_code == 0) {
+                return true;
+            } else {
+                LOG(ERROR) << filename << " exited with status " << status_code;
+            }
+        } else if (WIFSIGNALED(status)) {
+            LOG(ERROR) << filename << " killed by signal " << WTERMSIG(status);
+        } else if (WIFSTOPPED(status)) {
+            LOG(ERROR) << filename << " stopped by signal " << WSTOPSIG(status);
+        } else {
+            LOG(ERROR) << "waitpid for " << filename << " returned unexpected status: " << status;
+        }
+
+        return false;
+    }
 }
 
 }  // namespace init
