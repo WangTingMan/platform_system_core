@@ -36,21 +36,15 @@
 # endif // !CALLSTACK_WEAKS_AVAILABLE
 #endif // CALLSTACK_WEAK predefined
 
-<<<<<<< HEAD
 #ifdef _MSC_VER
-#define ALWAYS_INLINE
+#define CALLSTACK_ALWAYS_INLINE
 #else
-#define ALWAYS_INLINE __attribute__((always_inline))
+#define CALLSTACK_ALWAYS_INLINE __attribute__((always_inline))
 #endif
 
 #ifndef pid_t
 #define pid_t int
 #endif
-=======
-#ifndef CALLSTACK_ALWAYS_INLINE
-#define CALLSTACK_ALWAYS_INLINE __attribute__((always_inline))
-#endif  // CALLSTACK_ALWAYS_INLINE predefined
->>>>>>> 64d68e1d6
 
 namespace android {
 

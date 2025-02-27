@@ -24,6 +24,8 @@
 #include <utils/String8.h>
 #include <utils/TypeHelpers.h>
 
+#include <utils/utils_binder_export.h>
+
 #if __has_include(<string_view>)
 #include <string_view>
 #define HAS_STRING_VIEW
@@ -45,7 +47,7 @@ class StaticString16;
 // DO NOT USE: please use std::u16string
 
 //! This is a string holding UTF-16 characters.
-class String16
+class LIBUTILSBINDERSDK_API String16
 {
 public:
                                 String16();

@@ -19,9 +19,12 @@
 
 #include <functional>
 #include <type_traits>  // for common_type.
+#include <utils/utils_binder_export.h>
 
 // ---------------------------------------------------------------------------
 namespace android {
+
+LIBUTILSBINDERSDK_API void* retrieve_frame_address( int level );
 
 template<typename T> class wp;
 
@@ -192,7 +195,7 @@ COMPARE_STRONG_FUNCTIONAL(>=, std::greater_equal)
 #undef COMPARE_STRONG_FUNCTIONAL
 
 // For code size reasons, we do not want these inlined or templated.
-void sp_report_race();
+LIBUTILSBINDERSDK_API void sp_report_race();
 
 // ---------------------------------------------------------------------------
 // No user serviceable parts below here.

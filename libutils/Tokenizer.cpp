@@ -23,13 +23,10 @@
 #include <sys/stat.h>
 #include <log/log.h>
 
-<<<<<<< HEAD
-#include <fstream> 
+#include <fstream>
 #include <corecrt_io.h>
 
-=======
 #ifndef DEBUG_TOKENIZER
->>>>>>> 64d68e1d6
 // Enables debug output for the tokenizer.
 #define DEBUG_TOKENIZER 0
 #endif

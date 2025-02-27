@@ -23,7 +23,9 @@
 #include <vector>
 
 #include <log/log.h>
+#ifdef __ANDROID__
 #include <utils/Vector.h>
+#endif
 
 #if defined(__ANDROID__) && !defined(__ANDROID_RECOVERY__)
 #include <dlfcn.h>

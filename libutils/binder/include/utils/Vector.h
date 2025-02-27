@@ -16,6 +16,7 @@
 
 #ifndef ANDROID_VECTOR_H
 #define ANDROID_VECTOR_H
+#include <utils/utils_binder_export.h>
 
 #include <stdint.h>
 #include <sys/types.h>

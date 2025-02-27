@@ -21,6 +21,11 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <utils/Errors.h>
+#include <utils/utils_binder_export.h>
+
+#ifndef ssize_t
+#define ssize_t int64_t
+#endif
 
 // ---------------------------------------------------------------------------
 // No user serviceable parts in here...
@@ -37,7 +42,7 @@ namespace android {
  *
  */
 
-class VectorImpl
+class LIBUTILSBINDERSDK_API VectorImpl
 {
 public:
     enum { // flags passed to the ctor
@@ -128,7 +133,7 @@ private:
 
 
 
-class SortedVectorImpl : public VectorImpl
+class LIBUTILSBINDERSDK_API SortedVectorImpl : public VectorImpl
 {
 public:
                             SortedVectorImpl(size_t itemSize, uint32_t flags);

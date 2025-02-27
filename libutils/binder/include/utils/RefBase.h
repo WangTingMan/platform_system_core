@@ -223,6 +223,7 @@
 
 #include <utils/StrongPointer.h>
 #include <utils/TypeHelpers.h>
+#include <utils/utils_binder_export.h>
 
 // ---------------------------------------------------------------------------
 namespace android {
@@ -279,7 +280,7 @@ public:
 
 // ---------------------------------------------------------------------------
 
-class RefBase
+class LIBUTILSBINDERSDK_API RefBase
 {
 public:
             void            incStrong(const void* id) const;
@@ -291,7 +292,7 @@ public:
             //! DEBUGGING ONLY: Get current strong ref count.
             int32_t         getStrongCount() const;
 
-    class weakref_type
+    class LIBUTILSBINDERSDK_API weakref_type
     {
     public:
         RefBase*            refBase() const;
@@ -336,6 +337,18 @@ public:
     { 
         getWeakRefs()->trackMe(enable, retain); 
     }
+
+#ifdef _MSC_VER
+    void setName( std::string const& a_name )
+    {
+        mObjectName = a_name;
+    }
+
+    std::string const& getName()const
+    {
+        return mObjectName;
+    }
+#endif
 
 protected:
     // When constructing these objects, prefer using sp::make<>. Using a RefBase
@@ -394,6 +407,9 @@ private:
             const void* old_id, const void* new_id);
 
         weakref_impl* const mRefs;
+#ifdef _MSC_VER
+        std::string mObjectName;
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -703,7 +719,7 @@ void wp<T>::clear()
 
 // this class just serves as a namespace so TYPE::moveReferences can stay
 // private.
-class ReferenceMover {
+class LIBUTILSBINDERSDK_API ReferenceMover {
 public:
     // it would be nice if we could make sure no extra code is generated
     // for sp<TYPE> or wp<TYPE> when TYPE is a descendant of RefBase:

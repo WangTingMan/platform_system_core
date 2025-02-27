@@ -74,7 +74,7 @@ int SimpleLooperCallback::handleEvent(int fd, int events, void* data) {
 
 // Maximum number of file descriptors for which to retrieve poll events each iteration.
 static const int EPOLL_MAX_EVENTS = 16;
-<<<<<<< HEAD
+
 #ifndef _MSC_VER
 static pthread_once_t gTLSOnce = PTHREAD_ONCE_INIT;
 static pthread_key_t gTLSKey = 0;
@@ -82,11 +82,9 @@ static pthread_key_t gTLSKey = 0;
 static std::once_flag gTLSOnce;
 thread_local static std::shared_ptr<Looper> gTLSKey;
 #endif
-=======
 
 thread_local static sp<Looper> gThreadLocalLooper;
 
->>>>>>> 64d68e1d6
 Looper::Looper(bool allowNonCallbacks)
     : mAllowNonCallbacks(allowNonCallbacks),
       mSendingMessage(false),
@@ -106,56 +104,12 @@ Looper::Looper(bool allowNonCallbacks)
 Looper::~Looper() {
 }
 
-<<<<<<< HEAD
-void Looper::initTLSKey() {
-#ifndef _MSC_VER
-    int error = pthread_key_create(&gTLSKey, threadDestructor);
-    LOG_ALWAYS_FATAL_IF(error != 0, "Could not allocate TLS key: %s", strerror(error));
-#else
-#endif
-}
-
-void Looper::threadDestructor(void *st) {
-    Looper* const self = static_cast<Looper*>(st);
-    if (self != nullptr) {
-        self->decStrong((void*)threadDestructor);
-    }
-}
-
-void Looper::setForThread(const sp<Looper>& looper) {
-    sp<Looper> old = getForThread(); // also has side-effect of initializing TLS
-
-    if (looper != nullptr) {
-        looper->incStrong((void*)threadDestructor);
-    }
-#ifndef _MSC_VER
-    pthread_setspecific(gTLSKey, looper.get());
-#else
-    gTLSKey.reset(looper.get(), [](void*) {});
-#endif
-    if (old != nullptr) {
-        old->decStrong((void*)threadDestructor);
-    }
-}
-
-sp<Looper> Looper::getForThread() {
-#ifndef _MSC_VER
-    int result = pthread_once(& gTLSOnce, initTLSKey);
-    LOG_ALWAYS_FATAL_IF(result != 0, "pthread_once failed");
-
-    return (Looper*)pthread_getspecific(gTLSKey);
-#else
-    std::call_once(gTLSOnce, initTLSKey);
-    return gTLSKey.get();
-#endif
-=======
 void Looper::setForThread(const sp<Looper>& looper) {
     gThreadLocalLooper = looper;
 }
 
 sp<Looper> Looper::getForThread() {
     return gThreadLocalLooper;
->>>>>>> 64d68e1d6
 }
 
 sp<Looper> Looper::prepare(int opts) {
@@ -605,10 +559,10 @@ int Looper::repoll(int fd) {
             fd != request.fd,
             "Looper has inconsistent data structure. When looking up FD %d found FD %d.", fd,
             request_it->second.fd);
-
+#ifndef _MSC_VER
     epoll_event eventItem = createEpollEvent(request.getEpollEvents(), seq);
     if (epoll_ctl(mEpollFd.get(), EPOLL_CTL_MOD, fd, &eventItem) == -1) return 0;
-
+#endif
     return 1;  // success
 }
 

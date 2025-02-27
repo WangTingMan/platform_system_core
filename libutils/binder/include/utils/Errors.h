@@ -21,6 +21,8 @@
 #include <sys/types.h>
 #include <string>
 
+#include <utils/utils_binder_export.h>
+
 namespace android {
 
 /**
@@ -72,6 +74,6 @@ enum {
 };
 
 // Human readable name of error
-std::string statusToString(status_t status);
+LIBUTILSBINDERSDK_API std::string statusToString(status_t status);
 
 }  // namespace android

@@ -26,6 +26,8 @@
 #include <string.h> // for strcmp
 #include <stdarg.h>
 
+#include <utils/utils_binder_export.h>
+
 #if __has_include(<string>)
 #include <string>
 #define HAS_STRING
@@ -50,7 +52,7 @@ class String16;
 
 //! This is a string holding UTF-8 characters. Does not allow the value more
 // than 0x10FFFF, which is not valid unicode codepoint.
-class String8
+class LIBUTILSBINDERSDK_API String8
 {
 public:
                                 String8();
@@ -65,7 +67,7 @@ public:
     explicit                    String8(const char32_t* o, size_t numChars);
                                 ~String8();
 
-    static String8              format(const char* fmt, ...) __attribute__((format (printf, 1, 2)));
+    static String8              format(const char* fmt, ...) /*__attribute__((format (printf, 1, 2)))*/;
     static String8              formatV(const char* fmt, va_list args);
 
     inline  const char*         c_str() const;
@@ -90,7 +92,7 @@ public:
             status_t            append(const char* other, size_t numChars);
 
             status_t            appendFormat(const char* fmt, ...)
-                    __attribute__((format (printf, 2, 3)));
+                    /*__attribute__((format (printf, 2, 3)))*/;
             status_t            appendFormatV(const char* fmt, va_list args);
 
     inline  String8&            operator=(const String8& other);

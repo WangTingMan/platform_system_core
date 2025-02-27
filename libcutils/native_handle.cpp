@@ -70,6 +70,12 @@ int close_internal(const native_handle_t* h, bool allowUntagged) {
     if (h->version != sizeof(native_handle_t)) return -EINVAL;
 
     const int numFds = h->numFds;
+#ifdef _MSC_VER
+    for( int i = 0; i < numFds; ++i )
+    {
+        CloseHandle( h->data[i] );
+    }
+#else
     uint64_t tag;
     if (allowUntagged && numFds > 0 && android_fdsan_get_owner_tag(h->data[0]) == 0) {
         tag = 0;
@@ -81,6 +87,7 @@ int close_internal(const native_handle_t* h, bool allowUntagged) {
         android_fdsan_close_with_tag(h->data[i], tag);
     }
     errno = saved_errno;
+#endif
     return 0;
 }
 
@@ -89,9 +96,11 @@ void swap_fdsan_tags(const native_handle_t* handle, uint64_t expected_tag, uint6
 
     for (int i = 0; i < handle->numFds; i++) {
         // allow for idempotence to make the APIs easier to use
+#ifndef _MSC_VER
         if (android_fdsan_get_owner_tag(handle->data[i]) != new_tag) {
             android_fdsan_exchange_owner_tag(handle->data[i], expected_tag, new_tag);
         }
+#endif
     }
 }
 
@@ -176,29 +185,11 @@ int native_handle_delete(native_handle_t* h) {
 }
 
 int native_handle_close(const native_handle_t* h) {
-<<<<<<< HEAD
-    if (!h) return 0;
-
-    if (h->version != sizeof(native_handle_t)) return -EINVAL;
-
-    int saved_errno = errno;
-    const int numFds = h->numFds;
-    for (int i = 0; i < numFds; ++i) {
-#ifdef _MSC_VER
-        CloseHandle( h->data[i] );
-#else
-        close(h->data[i]);
-#endif
-    }
-    errno = saved_errno;
-    return 0;
-=======
     return close_internal(h, /*allowUntagged=*/true);
 }
 
 int native_handle_close_with_tag(const native_handle_t* h) {
     return close_internal(h, /*allowUntagged=*/false);
->>>>>>> 64d68e1d6
 }
 
 /**

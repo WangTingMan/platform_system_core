@@ -26,12 +26,13 @@
 #include <sys/types.h>
 
 #include <utils/utils_export.h>
+#include <utils/utils_binder_export.h>
 
 // ---------------------------------------------------------------------------
 
 namespace android {
 
-class UTILS_EXPORT SharedBuffer
+class LIBUTILSBINDERSDK_API SharedBuffer
 {
 public:
 

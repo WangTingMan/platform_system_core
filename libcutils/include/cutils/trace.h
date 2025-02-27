@@ -24,14 +24,7 @@
 #include <sys/types.h>
 #include <cutils/compiler.h>
 
-#if defined(_WIN32)
-#else 
-#include <stdatomic.h>
-#include <sys/cdefs.h>
-#include <unistd.h>
-#endif
-
-#include <cutils\cutils_export.h>
+#include <cutils/cutils_export.h>
 
 #ifdef _MSC_VER
 #ifdef __cplusplus
@@ -39,9 +32,7 @@
 #endif
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+__BEGIN_DECLS
 
 /**
  * The ATRACE_TAG macro can be defined before including this header to trace
@@ -104,34 +95,34 @@ extern "C" {
 #endif
 
 /** Internal implementation detail. Do not use. */
-void atrace_begin_body(const char*);
+CUTILS_EXPORT void atrace_begin_body(const char*);
 
 /** Internal implementation detail. Do not use. */
-void atrace_end_body();
+CUTILS_EXPORT void atrace_end_body();
 
 /** Internal implementation detail. Do not use. */
-void atrace_async_begin_body(const char*, int32_t);
+CUTILS_EXPORT void atrace_async_begin_body(const char*, int32_t);
 
 /** Internal implementation detail. Do not use. */
-void atrace_async_end_body(const char*, int32_t);
+CUTILS_EXPORT void atrace_async_end_body(const char*, int32_t);
 
 /** Internal implementation detail. Do not use. */
-void atrace_async_for_track_begin_body(const char*, const char*, int32_t);
+CUTILS_EXPORT void atrace_async_for_track_begin_body(const char*, const char*, int32_t);
 
 /** Internal implementation detail. Do not use. */
-void atrace_async_for_track_end_body(const char*, int32_t);
+CUTILS_EXPORT void atrace_async_for_track_end_body(const char*, int32_t);
 
 /** Internal implementation detail. Do not use. */
-void atrace_instant_body(const char*);
+CUTILS_EXPORT void atrace_instant_body(const char*);
 
 /** Internal implementation detail. Do not use. */
-void atrace_instant_for_track_body(const char*, const char*);
+CUTILS_EXPORT void atrace_instant_for_track_body(const char*, const char*);
 
 /** Internal implementation detail. Do not use. */
-void atrace_int_body(const char*, int32_t);
+CUTILS_EXPORT void atrace_int_body(const char*, int32_t);
 
 /** Internal implementation detail. Do not use. */
-void atrace_int64_body(const char*, int64_t);
+CUTILS_EXPORT void atrace_int64_body(const char*, int64_t);
 
 /**
  * Opens the trace file for writing and reads the property for initial tags.
@@ -151,7 +142,7 @@ CUTILS_EXPORT void atrace_update_tags();
  * Set whether tracing is enabled for the current process.  This is used to
  * prevent tracing within the Zygote process.
  */
-CUTILS_EXPORT extern void atrace_set_tracing_enabled(bool enabled);
+CUTILS_EXPORT void atrace_set_tracing_enabled(bool enabled);
 
 /**
  * This is always set to false. This forces code that uses an old version
@@ -169,13 +160,13 @@ CUTILS_EXPORT extern std::atomic_bool atrace_is_ready;
  * A value of zero indicates setup has failed.
  * Any other nonzero value indicates setup has succeeded, and tracing is on.
  */
-CUTILS_EXPORT extern uint64_t atrace_enabled_tags;
+extern CUTILS_EXPORT uint64_t atrace_enabled_tags;
 
 /**
  * Handle to the kernel's trace buffer, initialized to -1.
  * Any other value indicates setup has succeeded, and is a valid fd for tracing.
  */
-CUTILS_EXPORT extern int atrace_marker_fd;
+extern int atrace_marker_fd;
 
 /**
  * atrace_init readies the process for tracing by opening the trace_marker file.
@@ -187,8 +178,7 @@ CUTILS_EXPORT extern int atrace_marker_fd;
 
 CUTILS_EXPORT void atrace_init();
 CUTILS_EXPORT uint64_t atrace_get_enabled_tags();
-CUTILS_EXPORT void atrace_begin_body( const char* );
-CUTILS_EXPORT void atrace_end_body();
+
 /**
  * Test if a given tag is currently enabled.
  * Returns nonzero if the tag is enabled, otherwise zero.
@@ -315,8 +305,6 @@ static inline void atrace_instant_for_track(uint64_t tag, const char* track_name
     }
 }
 
-CUTILS_EXPORT void atrace_int_body( const char*, int32_t );
-
 /**
  * Traces an integer counter value.  name is used to identify the counter.
  * This can be used to track how a value changes over time.
@@ -341,8 +329,6 @@ static inline void atrace_int64(uint64_t tag, const char* name, int64_t value)
     }
 }
 
-#ifdef __cplusplus
-}
-#endif
+__END_DECLS
 
 #endif // _LIBS_CUTILS_TRACE_H

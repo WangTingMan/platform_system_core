@@ -17,11 +17,7 @@
 #include <cutils/trace.h>
 #include <atomic>
 
-<<<<<<< HEAD
 std::atomic_bool        atrace_is_ready      = ATOMIC_VAR_INIT(true);
-=======
-atomic_bool             atrace_is_ready      = true;
->>>>>>> 64d68e1d6
 int                     atrace_marker_fd     = -1;
 uint64_t                atrace_enabled_tags  = 0;
 

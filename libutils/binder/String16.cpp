@@ -15,13 +15,10 @@
  */
 
 #include <utils/String16.h>
-<<<<<<< HEAD:libutils/String16.cpp
 #include <utils/uitils_overflow_check_ms.h>
 #include <utils/Log.h>
-=======
 
 #include <log/log.h>
->>>>>>> 64d68e1d6:libutils/binder/String16.cpp
 
 #include <ctype.h>
 

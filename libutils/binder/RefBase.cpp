@@ -20,22 +20,15 @@
 #include <memory>
 #include <mutex>
 
-<<<<<<< HEAD:libutils/RefBase.cpp
-#include <log/log.h>
-
-#include <utils/RefBase.h>
-
-//#include <utils/Mutex.h>
-=======
 #include <fcntl.h>
 #include <log/log.h>
 
 #include <utils/RefBase.h>
 #include <utils/String8.h>
->>>>>>> 64d68e1d6:libutils/binder/RefBase.cpp
+#include <utils/StrongPointer.h>
 
 #ifndef __unused
-#define __unused __attribute__((__unused__))
+#define __unused
 #endif
 
 #ifndef FALLTHROUGH_INTENDED
