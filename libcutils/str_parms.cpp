@@ -28,7 +28,6 @@
 
 #include <cutils/hashmap.h>
 #include <cutils/memory.h>
-#include <log/log.h>
 
 /* When an object is allocated but not freed in a function,
  * because its ownership is released to other object like a hashmap,
@@ -152,7 +151,7 @@ struct str_parms *str_parms_create_str(const char *_string)
     if (!str)
         goto err_strdup;
 
-    ALOGV("%s: source string == '%s'\n", __func__, _string);
+    //ALOGV("%s: source string == '%s'\n", __func__, _string);
 
     kvpair = strtok_r(str, ";", &tmpstr);
     while (kvpair && *kvpair) {
@@ -190,8 +189,8 @@ next_pair:
         kvpair = strtok_r(NULL, ";", &tmpstr);
     }
 
-    if (!items)
-        ALOGV("%s: no items found in string\n", __func__);
+//    if (!items)
+//        ALOGV("%s: no items found in string\n", __func__);
 
     free(str);
 
@@ -359,7 +358,7 @@ char *str_parms_to_str(struct str_parms *str_parms)
 }
 
 static bool dump_entry(void* key, void* value, void* /*context*/) {
-    ALOGI("key: '%s' value: '%s'\n", (char *)key, (char *)value);
+    //ALOGI("key: '%s' value: '%s'\n", (char *)key, (char *)value);
     return true;
 }
 

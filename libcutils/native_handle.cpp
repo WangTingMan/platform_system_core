@@ -252,7 +252,14 @@ static inline HMODULE win32_dlopen( const char* name )
     av_free( name_w );
     return ret;
 #else
-    return LoadLibraryExA( name, NULL, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 );
+    HMODULE hMod = LoadLibraryExA( name, NULL, LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32 );
+    int error = 0;
+    if (!hMod)
+    {
+        error = GetLastError();
+        hMod = LoadLibraryA(name);
+    }
+    return hMod;
 #endif
 }
 

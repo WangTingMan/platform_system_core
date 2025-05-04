@@ -39,6 +39,8 @@ extern "C" {
 */
 CUTILS_EXPORT char* strsep( char** stringp, const char* delim );
 
+CUTILS_EXPORT char* strndup(const char* str, size_t maxlen);
+
 /* Declaration of strlcpy() for platforms that don't already have it. */
 CUTILS_EXPORT size_t strlcpy(char *dst, const char *src, size_t size);
 
@@ -63,6 +65,12 @@ CUTILS_EXPORT int __dump_to_file_descriptor
 #ifndef dprintf
 #define dprintf __dump_to_file_descriptor
 #endif
+
+#define asprintf util_asprintf
+CUTILS_EXPORT int util_asprintf(char** str, const char* fmt, ...);
+
+#define vasprintf util_vasprintf
+CUTILS_EXPORT int util_vasprintf(char** ret, const char* format, va_list ap);
 
 #endif
 

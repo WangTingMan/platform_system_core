@@ -58,6 +58,21 @@ char* strsep( char** stringp, const char* delim )
     return NULL;
 }
 
+char* strndup(const char* str, size_t maxlen)
+{
+    char* copy;
+    size_t len;
+
+    len = strnlen(str, maxlen);
+    copy = (char*)malloc(len + 1);
+    if (copy != NULL) {
+        (void)memcpy(copy, str, len);
+        copy[len] = '\0';
+    }
+
+    return copy;
+}
+
 /* Implementation of strlcpy() for platforms that don't already have it. */
 
 /*
@@ -148,6 +163,36 @@ int __dump_to_file_descriptor
         va_end( vaList );
     }
     return 0;
+}
+
+int util_asprintf(char** str, const char* fmt, ...)
+{
+    int ret;
+    va_list args;
+    va_start(args, fmt);
+    ret = vasprintf(str, fmt, args);
+    va_end(args);
+    return ret;
+}
+
+int util_vasprintf(char** ret, const char* format, va_list ap)
+{
+    va_list ap_copy;
+
+    /* Compute length of output string first */
+    va_copy(ap_copy, ap);
+    int r = vsnprintf(NULL, 0, format, ap_copy);
+    va_end(ap_copy);
+
+    if (r < 0)
+        return -1;
+
+    *ret = (char*)malloc(r + 1);
+    if (!*ret)
+        return -1;
+
+    /* Print to buffer */
+    return vsnprintf(*ret, r + 1, format, ap);
 }
 
 #ifdef __cplusplus
