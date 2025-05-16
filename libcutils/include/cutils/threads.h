@@ -167,6 +167,9 @@ CUTILS_EXPORT int pthread_self();
 #ifndef SCHED_FIFO
 #define SCHED_FIFO 1
 #endif
+#ifndef SCHED_RESET_ON_FORK
+#define SCHED_RESET_ON_FORK 1
+#endif
 CUTILS_EXPORT int sched_setscheduler( pid_t __pid, int __policy, const struct sched_param* __param );
 
 CUTILS_EXPORT int pthread_mutexattr_init( pthread_mutexattr_t* a_mutext_attr);

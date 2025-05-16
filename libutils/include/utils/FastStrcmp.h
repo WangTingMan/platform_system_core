@@ -21,7 +21,11 @@
 #include <string.h>
 
 #ifndef __predict_true
+#ifdef _MSC_VER
+#define __predict_true(exp) (exp)
+#else
 #define __predict_true(exp) __builtin_expect((exp) != 0, 1)
+#endif
 #endif
 
 #ifdef __cplusplus
