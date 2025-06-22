@@ -408,6 +408,13 @@ int pthread_setname_np(pthread_t __pthread, const char* __name)
         return 0;
     }
 
+    uint64_t underly_id = gettid();
+    if (__pthread == underly_id)
+    {
+        base::PlatformThread::SetName(__name);
+        return 0;
+    }
+
     LOG(ERROR) << "This thread is not managed by pthread manager. Cannot set name now";
     return -1;
 }
