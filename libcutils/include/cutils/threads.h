@@ -26,7 +26,10 @@
 #include <pthread.h>
 #endif
 
+#ifdef __cplusplus
 #include <mutex>
+#endif
+
 #include <stdint.h>
 
 #ifdef __cplusplus
