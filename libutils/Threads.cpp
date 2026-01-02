@@ -44,6 +44,8 @@
 
 #include <base/threading/platform_thread.h>
 
+#include <utils//Timers.h>
+
 /*
  * ===========================================================================
  *      Thread wrappers
@@ -563,7 +565,7 @@ status_t Condition::wait(Mutex& mutex)
     return ((WinCondition*)mState)->wait(condState, hMutex, NULL);
 }
 
-status_t Condition::waitRelative(Mutex& mutex, nsecs_t reltime)
+status_t Condition::waitRelative(Mutex& mutex, int64_t reltime)
 {
     WinCondition* condState = (WinCondition*) mState;
     HANDLE hMutex = (HANDLE) mutex.mState;

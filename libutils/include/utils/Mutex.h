@@ -26,7 +26,6 @@
 #endif
 
 #include <utils/Errors.h>
-#include <utils/Timers.h>
 
 #include <utils/utils_export.h>
 

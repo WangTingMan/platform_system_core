@@ -28,7 +28,6 @@
 
 #include <utils/Errors.h>
 #include <utils/Mutex.h>
-#include <utils/Timers.h>
 
 #include <utils/utils_export.h>
 
@@ -70,7 +69,7 @@ public:
     // Note that spurious wake-ups may happen.
     status_t wait(Mutex& mutex);
     // same with relative timeout
-    status_t waitRelative(Mutex& mutex, nsecs_t reltime);
+    status_t waitRelative(Mutex& mutex, int64_t reltime);
     // Signal the condition variable, allowing one thread to continue.
     void signal();
     // Signal the condition variable, allowing one or all threads to continue.
