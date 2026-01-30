@@ -23,6 +23,10 @@
 #include <cutils/memory.h>
 #include <cstdlib>
 #include <cstdarg>
+#include <algorithm>
+
+#include <windows.h>
+#include <corecrt_io.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -193,6 +197,144 @@ int util_vasprintf(char** ret, const char* format, va_list ap)
 
     /* Print to buffer */
     return vsnprintf(*ret, r + 1, format, ap);
+}
+
+static std::string program_name;
+void setprogname( const char* p )
+{
+    if( !p ) p = "(unknown)";
+    program_name.assign( p );
+}
+
+const char* getprogname( void )
+{
+    return program_name.c_str();
+}
+
+int setenv( const char* name, const char* value, int overwrite )
+{
+    if( !name || !value )
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if( !overwrite && getenv( name ) )
+        return 0;
+    int err = _putenv_s( name, value );
+    if( err != 0 )
+    {
+        errno = err;
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * 返回值：0 成功，-1 失败并设置 errno
+ * mode = 0 ：稀疏预占（最常用，无需特权）
+ * mode = 1 ：立即占物理簇（需管理员，性能最高）
+ */
+inline int win_fallocate( int fd, int64_t offset, int64_t len, int mode = 0 )
+{
+    if( offset < 0 || len <= 0 )
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    HANDLE h = reinterpret_cast< HANDLE >( _get_osfhandle( fd ) );
+    if( h == INVALID_HANDLE_VALUE )
+    {
+        errno = EBADF;
+        return -1;
+    }
+
+    /* 一、稀疏打洞 (PUNCH_HOLE) ---------------------------- */
+    if( mode & FALLOC_FL_PUNCH_HOLE )
+    {
+        FILE_ZERO_DATA_INFORMATION zdi;
+        zdi.FileOffset.QuadPart = offset;
+        zdi.BeyondFinalZero.QuadPart = offset + len;
+
+        if( !DeviceIoControl( h, FSCTL_SET_ZERO_DATA,
+            &zdi, sizeof( zdi ), nullptr, 0,
+            nullptr, nullptr ) )
+        {
+            errno = ( GetLastError() == ERROR_INVALID_FUNCTION ||
+                GetLastError() == ERROR_NOT_SUPPORTED )
+                ? EOPNOTSUPP : EIO;
+            return -1;
+        }
+        /* Windows 打洞会扩张文件；若需要 KEEP_SIZE 再截回 */
+        if( mode & FALLOC_FL_KEEP_SIZE )
+        {
+            FILE_END_OF_FILE_INFO eofi;
+            eofi.EndOfFile.QuadPart = offset; // 保守：截到原来 offset
+            SetFileInformationByHandle( h, FileEndOfFileInfo,
+                &eofi, sizeof( eofi ) );
+        }
+        return 0;
+    }
+
+    /* 二、纯 KEEP_SIZE 无 PUNCH -> 暂无底层支持 ------------- */
+    if( mode & FALLOC_FL_KEEP_SIZE )
+    {
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+
+    /* 三、普通预分配 (mode == 0) -----------------------------
+     * 策略：先 SetEndOfFile 到 offset+len，再按需 SetFileValidData
+     *       做“物理占簇”加速；失败则退化为稀疏文件。
+     */
+    LARGE_INTEGER off;
+    off.QuadPart = offset + len;
+    if( !SetFilePointerEx( h, off, nullptr, FILE_BEGIN ) ||
+        !SetEndOfFile( h ) )
+    {
+        errno = EIO;
+        return -1;
+    }
+
+    /* 可选：尝试物理占簇（需 SeManageVolumePrivilege）*/
+    TOKEN_PRIVILEGES tp{};
+    LUID luid;
+    HANDLE tok = nullptr;
+    if( OpenProcessToken( GetCurrentProcess(),
+        TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok ) &&
+        LookupPrivilegeValueW( nullptr, L"SeManageVolumePrivilege", &luid ) )
+    {
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        AdjustTokenPrivileges( tok, FALSE, &tp, sizeof( tp ), nullptr, nullptr );
+    }
+    if( tok ) CloseHandle( tok );
+
+    if( !SetFileValidData( h, off.QuadPart ) ) {
+        /* 失败也无所谓，文件已经是稀疏预占状态 */
+    }
+    return 0;
+}
+
+int fallocate( int fd, int mode, int64_t offset, int64_t len )
+{
+    int result = win_fallocate( fd, offset, len, mode );
+    return result;
+}
+
+uint32_t getpagesize()
+{
+    static int pagesize = 0;
+    if( pagesize == 0 )
+    {
+        SYSTEM_INFO system_info;
+        GetSystemInfo( &system_info );
+        pagesize = std::max( system_info.dwPageSize,
+            system_info.dwAllocationGranularity );
+    }
+    return pagesize;
 }
 
 #ifdef __cplusplus

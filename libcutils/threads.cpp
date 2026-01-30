@@ -26,6 +26,7 @@
 #include <windows.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <thread>
@@ -578,6 +579,167 @@ int pthread_cond_broadcast( pthread_cond_t* const cond )
 {
     WakeAllConditionVariable( cond );
     return 0;
+}
+
+int getpriority( int which, int who )
+{
+    constexpr int CLASS_WEIGHT[] =
+    {
+        0,  // IDLE_PRIORITY_CLASS
+        1,  // BELOW_NORMAL_PRIORITY_CLASS
+        2,  // NORMAL_PRIORITY_CLASS
+        3,  // ABOVE_NORMAL_PRIORITY_CLASS
+        4,  // HIGH_PRIORITY_CLASS
+        5   // REALTIME_PRIORITY_CLASS
+    };
+
+    // 线程相对优先级权重：-2…2 映射到 0…4
+    constexpr int REL_WEIGHT[] =
+    {
+        0,  // THREAD_PRIORITY_IDLE         (-15)
+        1,  // THREAD_PRIORITY_LOWEST       (-2)
+        2,  // THREAD_PRIORITY_BELOW_NORMAL (-1)
+        3,  // THREAD_PRIORITY_NORMAL       (0)
+        4   // THREAD_PRIORITY_ABOVE_NORMAL (+1)
+        // 其余 HIGHEST/TIME_CRITICAL 也按 4 处理，简化
+    };
+
+    if (who != 0)
+    {
+        errno = EINVAL;
+        return -21;
+    }
+
+    DWORD pc = 0;
+    int   tc = 0;
+
+    switch (which)
+    {
+    case PRIO_PROCESS:
+    case PRIO_PGRP:
+        pc = GetPriorityClass(GetCurrentProcess());
+        tc = THREAD_PRIORITY_NORMAL; // 取主线程缺省相对优先级
+        break;
+    case PRIO_USER: // 把“用户”当成当前线程
+        pc = GetPriorityClass(GetCurrentProcess());
+        tc = GetThreadPriority(GetCurrentThread());
+        break;
+    default:
+        errno = EINVAL;
+        return -21;
+    }
+
+    // 把 pc 转成下标
+    int cidx = 2; // 默认 NORMAL
+    if (pc == IDLE_PRIORITY_CLASS)          cidx = 0;
+    else if (pc == BELOW_NORMAL_PRIORITY_CLASS) cidx = 1;
+    else if (pc == ABOVE_NORMAL_PRIORITY_CLASS) cidx = 3;
+    else if (pc == HIGH_PRIORITY_CLASS)         cidx = 4;
+    else if (pc == REALTIME_PRIORITY_CLASS)     cidx = 5;
+
+    // 把 tc 粗粒度化
+    int tidx = 3;
+    if (tc <= THREAD_PRIORITY_IDLE)         tidx = 0;
+    else if (tc <= THREAD_PRIORITY_LOWEST)      tidx = 1;
+    else if (tc <= THREAD_PRIORITY_BELOW_NORMAL)tidx = 2;
+    else if (tc >= THREAD_PRIORITY_ABOVE_NORMAL)tidx = 4;
+
+    // 线性映射到 -20…19
+    int w = CLASS_WEIGHT[cidx] * 5 + REL_WEIGHT[tidx];
+    return std::clamp(-20 + w, -20, 19);
+}
+
+int setpriority( int which, int who, int nice )
+{
+    if( which != PRIO_PROCESS || who != 0 )
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if( nice < -20 || nice > 19 )
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* 把 -20…19 的 40 段映射到 0…29 的权重区间 */
+    int w = nice + 20;          // 0…39
+    int classIdx = w / 7;       // 0…5
+    int relIdx = ( w % 7 ) / 2; // 0…4 粗粒度化
+
+    /* 边界保护 */
+    if( classIdx > 5 ) classIdx = 5;
+    if( relIdx > 4 ) relIdx = 4;
+
+    /* 权重 → Windows 常量 */
+    DWORD priorityClass = NORMAL_PRIORITY_CLASS;
+    switch( classIdx )
+    {
+    case 0: priorityClass = IDLE_PRIORITY_CLASS;          break;
+    case 1: priorityClass = BELOW_NORMAL_PRIORITY_CLASS;  break;
+    case 2: priorityClass = NORMAL_PRIORITY_CLASS;        break;
+    case 3: priorityClass = ABOVE_NORMAL_PRIORITY_CLASS;  break;
+    case 4: priorityClass = HIGH_PRIORITY_CLASS;          break;
+    case 5: priorityClass = REALTIME_PRIORITY_CLASS;      break;
+    }
+
+    int threadPrio = THREAD_PRIORITY_NORMAL;
+    switch( relIdx )
+    {
+    case 0: threadPrio = THREAD_PRIORITY_IDLE;         break;
+    case 1: threadPrio = THREAD_PRIORITY_LOWEST;       break;
+    case 2: threadPrio = THREAD_PRIORITY_BELOW_NORMAL; break;
+    case 3: threadPrio = THREAD_PRIORITY_NORMAL;       break;
+    case 4: threadPrio = THREAD_PRIORITY_ABOVE_NORMAL; break;
+    }
+
+    /* 先设进程优先级类 */
+    if( !SetPriorityClass( GetCurrentProcess(), priorityClass ) )
+    {
+        errno = EPERM;
+        return -1;
+    }
+
+    /* 再设主线程相对优先级（调试够用） */
+    if( !SetThreadPriority( GetCurrentThread(), threadPrio ) )
+    {
+        errno = EPERM;
+        return -1;
+    }
+
+    return 0;
+}
+
+#define SCHED_OTHER  0
+#define SCHED_BATCH  3
+#define SCHED_IDLE   5
+
+int sched_getscheduler( pid_t pid )
+{
+    if( pid != 0 )
+    {
+        errno = EINVAL;
+        return -1;
+    }
+
+    DWORD pc = GetPriorityClass( GetCurrentProcess() );
+    int   tc = GetThreadPriority( GetCurrentThread() );
+
+    /* 1. 最容易识别的极端值 */
+    if( pc == IDLE_PRIORITY_CLASS )
+    {
+        return ( tc <= THREAD_PRIORITY_IDLE ) ? SCHED_IDLE : SCHED_BATCH;
+    }
+
+    if( pc == REALTIME_PRIORITY_CLASS )
+    {
+        /* 实时类里再分 RR / FIFO：简单按线程优先级阈值划分 */
+        return ( tc >= THREAD_PRIORITY_TIME_CRITICAL ) ? SCHED_FIFO : SCHED_RR;
+    }
+
+    /* 2. 其余全部算 SCHED_OTHER */
+    return SCHED_OTHER;
 }
 
 }

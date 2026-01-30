@@ -77,7 +77,7 @@ public:
     // Indicates whether this thread is running or not.
             bool        isRunning() const;
 
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(_MSC_VER)
     // Return the thread's kernel ID, same as the thread itself calling gettid(),
     // or -1 if the thread is not running.
             pid_t       getTid() const;
@@ -108,7 +108,7 @@ private:
     volatile bool           mExitPending;
     volatile bool           mRunning;
             sp<Thread>      mHoldSelf;
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(_MSC_VER)
     // legacy for debugging, not used by getTid() as it is set by the child thread
     // and so is not initialized until the child reaches that point
             pid_t           mTid;

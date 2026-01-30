@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <intrin.h>
+#include <bit>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -138,6 +139,12 @@ inline unsigned __int64 __lzcnt_switcher(
 #define __builtin_mul_overflow( a, b, sum ) __mul_overflowed( (a), (b), (*sum) )
 #define __builtin_clz(a) __lzcnt_switcher(a)
 #define __builtin_clzl(a) __lzcnt_switcher(a)
-
+#define __builtin_ctz(a)  std::countr_zero( a )
+#define __builtin_ctzl(x) std::countr_zero( static_cast< unsigned long >( x ) )
+#define __builtin_popcountll(v) std::popcount( v )
+#define __builtin_clzll(v) std::countl_zero( v )
+#define __builtin_ctzll(v) std::countr_zero( v )
+#define __builtin_align_up(v, a)  (((v) + (a) - 1) & ~((a) - 1))
+#define __builtin_align_down(v, a)  ((v) & ~((a) - 1))
 #endif
 

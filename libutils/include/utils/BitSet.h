@@ -19,6 +19,9 @@
 
 #include <stdint.h>
 #include <utils/TypeHelpers.h>
+#include <utils/uitils_overflow_check_ms.h>
+
+#include <bitset>
 
 /*
  * A class to provide efficient manipulation of bitsets.
@@ -50,7 +53,7 @@ struct BitSet32 {
     inline uint32_t count() const { return count(value); }
 
     static inline uint32_t count(uint32_t value) {
-        return static_cast<uint32_t>(__builtin_popcountl(value));
+        return static_cast<uint32_t>( std::popcount( static_cast< unsigned long >( value ) ) );
     }
 
     // Returns true if the bit set does not contain any marked bits.
@@ -133,7 +136,8 @@ struct BitSet32 {
     }
 
     static inline uint32_t getIndexOfBit(uint32_t value, uint32_t n) {
-        return static_cast<uint32_t>(__builtin_popcountl(value & ~(0xffffffffUL >> n)));
+        auto result = std::popcount( static_cast< unsigned long >( value & ~( 0xffffffffUL >> n ) ) );
+        return static_cast<uint32_t>( result );
     }
 
     inline bool operator== (const BitSet32& other) const { return value == other.value; }

@@ -72,6 +72,22 @@ CUTILS_EXPORT int util_asprintf(char** str, const char* fmt, ...);
 #define vasprintf util_vasprintf
 CUTILS_EXPORT int util_vasprintf(char** ret, const char* format, va_list ap);
 
+CUTILS_EXPORT void setprogname( const char* p );
+
+CUTILS_EXPORT const char* getprogname( void );
+
+CUTILS_EXPORT int setenv( const char* name, const char* value, int overwrite );
+
+#ifndef FALLOC_FL_KEEP_SIZE
+#  define FALLOC_FL_KEEP_SIZE    0x01
+#endif
+#ifndef FALLOC_FL_PUNCH_HOLE
+#  define FALLOC_FL_PUNCH_HOLE   0x02
+#endif
+CUTILS_EXPORT int fallocate( int fd, int mode, int64_t offset, int64_t len );
+
+CUTILS_EXPORT uint32_t getpagesize();
+
 #endif
 
 #ifdef __cplusplus

@@ -170,6 +170,9 @@ CUTILS_EXPORT int pthread_self();
 #ifndef SCHED_FIFO
 #define SCHED_FIFO 1
 #endif
+#ifndef SCHED_RR
+#define SCHED_RR 2
+#endif
 #ifndef SCHED_RESET_ON_FORK
 #define SCHED_RESET_ON_FORK 1
 #endif
@@ -204,6 +207,15 @@ CUTILS_EXPORT int pthread_cond_timedwait( pthread_cond_t* const cond,
 CUTILS_EXPORT int pthread_cond_signal( pthread_cond_t* const cond );
 
 CUTILS_EXPORT int pthread_cond_broadcast( pthread_cond_t* const cond );
+
+#define PRIO_PROCESS 0   /* 操作对象为单个进程   */
+#define PRIO_PGRP    1   /* 操作对象为进程组     */
+#define PRIO_USER    2   /* 操作对象为用户所有进程 */
+CUTILS_EXPORT int getpriority(int which, int who);
+
+CUTILS_EXPORT int setpriority( int which, int who, int nice );
+
+CUTILS_EXPORT int sched_getscheduler( pid_t pid );
 
 #endif
 
