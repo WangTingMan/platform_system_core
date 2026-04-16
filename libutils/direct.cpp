@@ -1058,6 +1058,25 @@ extern "C" {
         return stat( path, st );
     }
 
+    int link_win_version( const char* oldpath, const char* newpath )
+    {
+        DWORD attr_old = GetFileAttributesA( oldpath );
+        if (attr_old == INVALID_FILE_ATTRIBUTES)
+            return -1;
+
+        if (attr_old & FILE_ATTRIBUTE_DIRECTORY)
+            return -1;
+
+        DWORD attr_new = GetFileAttributesA( newpath );
+        if (attr_new != INVALID_FILE_ATTRIBUTES)
+            DeleteFileA( newpath );
+
+        if (TRUE == CreateHardLinkA( newpath, oldpath, NULL ))
+            return 0;
+        else
+            return -1;
+    }
+
     /* Alphabetical sorting */
     static int
         alphasort(

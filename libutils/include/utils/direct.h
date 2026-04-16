@@ -109,6 +109,10 @@ UTILS_EXPORT int scandir(
     int ( *filter )( const struct dirent* ),
     int ( *compare )( const struct dirent**, const struct dirent** ) );
 UTILS_EXPORT int lstat( const char*, struct stat*);
+UTILS_EXPORT int link_win_version( const char* oldpath, const char* newpath );
+
+#define link link_win_version
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

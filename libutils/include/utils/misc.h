@@ -24,6 +24,9 @@
 
 #include <utils/utils_export.h>
 
+#include <string>
+#include <vector>
+
 /* get #of elements in a static array
  * DO NOT USE: please use std::vector/std::array instead
  */
@@ -36,7 +39,11 @@ namespace android {
 typedef void (*sysprop_change_callback)(void);
 UTILS_EXPORT void add_sysprop_change_callback(sysprop_change_callback cb, int priority);
 UTILS_EXPORT void report_sysprop_change();
-
+UTILS_EXPORT std::string binary_to_hex_string(const void* a_buffer, uint32_t a_size);
+inline std::string binary_to_hex_string(std::vector<char> a_buffer)
+{
+    return binary_to_hex_string( a_buffer.data(), a_buffer.size() );
+}
 }  // namespace android
 
 #endif // _LIBS_UTILS_MISC_H

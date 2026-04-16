@@ -20,7 +20,9 @@
 
 #include <thread>
 #include <mutex>
+#include <sstream>
 #include <vector>
+#include <iomanip>
 
 #include <log/log.h>
 #ifdef __ANDROID__
@@ -119,6 +121,25 @@ void report_sysprop_change() {
         (*func)();
     }
 #endif
+}
+
+std::string binary_to_hex_string(const void* a_buffer, uint32_t a_size)
+{
+    const unsigned char* p = static_cast<const unsigned char*>(a_buffer);
+    std::stringstream ss;
+    ss << std::hex << std::uppercase << std::setfill('0');
+    for (size_t i = 0; i < a_size; ++i)
+    {
+        ss << std::setw(2) << static_cast<int>(p[i]);
+
+        if (i != a_size - 1)
+        {
+            ss << " ";
+        }
+    }
+
+    ss << std::dec << std::nouppercase << std::setfill(' ');
+    return ss.str();
 }
 
 };  // namespace android
