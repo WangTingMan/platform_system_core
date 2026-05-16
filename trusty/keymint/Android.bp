@@ -20,41 +20,93 @@ package {
 rust_defaults {
     name: "android.hardware.security.keymint-service.rust.trusty.default",
     relative_install_path: "hw",
-    srcs: [
-        "src/keymint_hal_main.rs",
-    ],
     rustlibs: [
         "libandroid_logger",
         "libbinder_rs",
         "libclap",
         "libkmr_wire",
         "libkmr_hal",
-        "libtrusty-rs",
-        "liblibc",
         "liblog_rust",
     ],
     prefer_rlib: true,
 }
 
+// keymint hal binary for keymint in Trusty TEE (legacy approach not using apex)
 rust_binary {
     name: "android.hardware.security.keymint-service.rust.trusty",
+    srcs: [
+        "src/keymint_hal_main.rs",
+    ],
     vendor: true,
     defaults: ["android.hardware.security.keymint-service.rust.trusty.default"],
     init_rc: ["android.hardware.security.keymint-service.rust.trusty.rc"],
     vintf_fragments: ["android.hardware.security.keymint-service.rust.trusty.xml"],
-    required: select(release_flag("RELEASE_AIDL_USE_UNFROZEN"), {
-        true: ["android.hardware.hardware_keystore.xml"],
-        default: ["android.hardware.hardware_keystore_V3.xml"],
-    }),
+    required: ["android.hardware.hardware_keystore.xml"],
+    rustlibs: [
+        "libtrusty-rs",
+    ],
 }
 
+// Keymint hal service in vendor, enabled by vendor apex.
+// This service is disabled by default and does not package a VINTF fragment.
+// This service can be enabled at boot via vendor apex:
+// - at boot, mount a vendor apex for module `com.android.hardware.keymint`
+// - have the vendor apex init.rc file to start the service when the apex is selected
+// - have the vendor apex package the vintf fragment
 rust_binary {
-    name: "android.hardware.security.keymint-service.rust.trusty.system.nonsecure",
-    system_ext_specific: true,
+    name: "android.hardware.security.keymint-service.trusty_tee",
+    srcs: [
+        "src/keymint_hal_main.rs",
+    ],
+    vendor: true,
     defaults: ["android.hardware.security.keymint-service.rust.trusty.default"],
-    init_rc: ["android.hardware.security.keymint-service.rust.trusty.system.nonsecure.rc"],
-    features: ["nonsecure"],
+    init_rc: ["android.hardware.security.keymint-service.trusty_tee.rc"],
+    features: select(soong_config_variable("trusty_system_vm", "placeholder_trusted_hal"), {
+        true: ["nonsecure"],
+        default: [],
+    }),
     rustlibs: [
         "libkmr_hal_nonsecure",
+        "libtrusty-rs",
     ],
+}
+
+// Keymint hal service in system_ext, interacting with the Trusty Security VM.
+// This service is disabled by default and does not package a VINTF fragment.
+// This service can be enabled at boot via vendor apex:
+// - at boot, mount a vendor apex for module `com.android.hardware.keymint`
+// - have the vendor apex init.rc file to start the service when the apex is selected
+// - have the vendor apex package the vintf fragment
+rust_binary {
+    name: "android.hardware.security.keymint-service.trusty_system_vm",
+    system_ext_specific: true,
+    defaults: ["android.hardware.security.keymint-service.rust.trusty.default"],
+    init_rc: ["android.hardware.security.keymint-service.trusty_system_vm.rc"],
+    features: select(soong_config_variable("trusty_system_vm", "placeholder_trusted_hal"), {
+        true: ["nonsecure"],
+        default: [],
+    }),
+    srcs: [
+        "src/keymint_hal_system_vm_main.rs",
+    ],
+    rustlibs: [
+        "android.trusty.commservice-rust",
+        "libanyhow",
+        "libkmr_hal_nonsecure",
+    ],
+}
+
+// vintf fragment packaged in vendor apex
+prebuilt_etc {
+    name: "android.hardware.security.keymint-service.rust.trusty.xml",
+    sub_dir: "vintf",
+    vendor: true,
+    src: "android.hardware.security.keymint-service.rust.trusty.xml",
+}
+
+prebuilt_etc {
+    name: "android.hardware.security.keymint-service.trusty_system_vm.xml",
+    sub_dir: "vintf",
+    vendor: true,
+    src: "android.hardware.security.keymint-service.trusty_system_vm.xml",
 }

@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include <utils/Errors.h>
 #include <utils/String8.h>
@@ -127,11 +128,9 @@ public:
 
     inline                      operator const char16_t*() const;
 
-#ifdef HAS_STRING_VIEW
     // Implicit cast to std::u16string is not implemented on purpose - u16string_view is much
     // lighter and if one needs, they can still create u16string from u16string_view.
     inline                      operator std::u16string_view() const;
-#endif
 
     // Static and non-static String16 behave the same for the users, so
     // this method isn't of much use for the users. It is public for testing.
@@ -318,36 +317,44 @@ inline int String16::compare(const String16& other) const
 
 inline bool String16::operator<(const String16& other) const
 {
+    if (mString == other.mString) return false;
     return strzcmp16(mString, size(), other.mString, other.size()) < 0;
 }
 
 inline bool String16::operator<=(const String16& other) const
 {
+    if (mString == other.mString) return true;
     return strzcmp16(mString, size(), other.mString, other.size()) <= 0;
 }
 
 inline bool String16::operator==(const String16& other) const
 {
+    if (mString == other.mString) return true;
     return strzcmp16(mString, size(), other.mString, other.size()) == 0;
 }
 
 inline bool String16::operator!=(const String16& other) const
 {
-    return strzcmp16(mString, size(), other.mString, other.size()) != 0;
+    return !operator==(other);
 }
 
 inline bool String16::operator>=(const String16& other) const
 {
+    if (mString == other.mString) return true;
     return strzcmp16(mString, size(), other.mString, other.size()) >= 0;
 }
 
 inline bool String16::operator>(const String16& other) const
 {
+    if (mString == other.mString) return false;
     return strzcmp16(mString, size(), other.mString, other.size()) > 0;
 }
 
 #if __cplusplus >= 202002L
 inline std::strong_ordering String16::operator<=>(const String16& other) const {
+    if (mString == other.mString) {
+        return std::strong_ordering::equal;
+    }
     int result = strzcmp16(mString, size(), other.mString, other.size());
     if (result == 0) {
         return std::strong_ordering::equal;
@@ -361,36 +368,44 @@ inline std::strong_ordering String16::operator<=>(const String16& other) const {
 
 inline bool String16::operator<(const char16_t* other) const
 {
+    if (mString == other) return false;
     return strcmp16(mString, other) < 0;
 }
 
 inline bool String16::operator<=(const char16_t* other) const
 {
+    if (mString == other) return true;
     return strcmp16(mString, other) <= 0;
 }
 
 inline bool String16::operator==(const char16_t* other) const
 {
+    if (mString == other) return true;
     return strcmp16(mString, other) == 0;
 }
 
 inline bool String16::operator!=(const char16_t* other) const
 {
-    return strcmp16(mString, other) != 0;
+    return !operator==(other);
 }
 
 inline bool String16::operator>=(const char16_t* other) const
 {
+    if (mString == other) return true;
     return strcmp16(mString, other) >= 0;
 }
 
 inline bool String16::operator>(const char16_t* other) const
 {
+    if (mString == other) return false;
     return strcmp16(mString, other) > 0;
 }
 
 #if __cplusplus >= 202002L
 inline std::strong_ordering String16::operator<=>(const char16_t* other) const {
+    if (mString == other) {
+        return std::strong_ordering::equal;
+    }
     int result = strcmp16(mString, other);
     if (result == 0) {
         return std::strong_ordering::equal;
@@ -415,7 +430,5 @@ inline String16::operator std::u16string_view() const
 }  // namespace android
 
 // ---------------------------------------------------------------------------
-
-#undef HAS_STRING_VIEW
 
 #endif // ANDROID_STRING16_H

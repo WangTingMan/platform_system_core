@@ -15,6 +15,7 @@
  *
  */
 
+#include <functional>
 #include <fuzzer/FuzzedDataProvider.h>
 #include <liblp/builder.h>
 #include <liblp/property_fetcher.h>
@@ -336,7 +337,6 @@ void BuilderFuzzer::invokeBuilderAPIs() {
                     },
                     [&]() { mBuilder->HasBlockDevice(mFdp.PickValueInArray(mPartitionNames)); },
                     [&]() { mBuilder->SetVirtualABDeviceFlag(); },
-                    [&]() { mBuilder->SetAutoSlotSuffixing(); },
                     [&]() { mBuilder->ListGroups(); },
                     [&]() { mBuilder->UsedSpace(); },
                     [&]() { mBuilder->RequireExpandedMetadataHeader(); },

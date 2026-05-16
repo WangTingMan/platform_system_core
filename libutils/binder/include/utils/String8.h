@@ -18,6 +18,8 @@
 #define ANDROID_STRING8_H
 
 #include <iostream>
+#include <string>
+#include <string_view>
 
 #include <utils/Errors.h>
 #include <utils/Unicode.h>
@@ -59,6 +61,7 @@ public:
                                 String8(const String8& o);
     explicit                    String8(const char* o);
     explicit                    String8(const char* o, size_t numChars);
+    explicit                    String8(std::string_view o);
 
     explicit                    String8(const String16& o);
     explicit                    String8(const char16_t* o);
@@ -128,9 +131,7 @@ public:
 
     inline                      operator const char*() const;
 
-#ifdef HAS_STRING_VIEW
     inline explicit             operator std::string_view() const;
-#endif
 
             char*               lockBuffer(size_t size);
             void                unlockBuffer();
@@ -286,36 +287,44 @@ inline int String8::compare(const String8& other) const
 
 inline bool String8::operator<(const String8& other) const
 {
+    if (mString == other.mString) return false;
     return strcmp(mString, other.mString) < 0;
 }
 
 inline bool String8::operator<=(const String8& other) const
 {
+    if (mString == other.mString) return true;
     return strcmp(mString, other.mString) <= 0;
 }
 
 inline bool String8::operator==(const String8& other) const
 {
+    if (mString == other.mString) return true;
     return strcmp(mString, other.mString) == 0;
 }
 
 inline bool String8::operator!=(const String8& other) const
 {
-    return strcmp(mString, other.mString) != 0;
+    return !operator==(other);
 }
 
 inline bool String8::operator>=(const String8& other) const
 {
+    if (mString == other.mString) return true;
     return strcmp(mString, other.mString) >= 0;
 }
 
 inline bool String8::operator>(const String8& other) const
 {
+    if (mString == other.mString) return false;
     return strcmp(mString, other.mString) > 0;
 }
 
 #if __cplusplus >= 202002L
 inline std::strong_ordering String8::operator<=>(const String8& other) const {
+    if (mString == other.mString) {
+        return std::strong_ordering::equal;
+    }
     int result = strcmp(mString, other.mString);
     if (result == 0) {
         return std::strong_ordering::equal;
@@ -329,36 +338,44 @@ inline std::strong_ordering String8::operator<=>(const String8& other) const {
 
 inline bool String8::operator<(const char* other) const
 {
+    if (mString == other) return false;
     return strcmp(mString, other) < 0;
 }
 
 inline bool String8::operator<=(const char* other) const
 {
+    if (mString == other) return true;
     return strcmp(mString, other) <= 0;
 }
 
 inline bool String8::operator==(const char* other) const
 {
+    if (mString == other) return true;
     return strcmp(mString, other) == 0;
 }
 
 inline bool String8::operator!=(const char* other) const
 {
-    return strcmp(mString, other) != 0;
+    return !operator==(other);
 }
 
 inline bool String8::operator>=(const char* other) const
 {
+    if (mString == other) return true;
     return strcmp(mString, other) >= 0;
 }
 
 inline bool String8::operator>(const char* other) const
 {
+    if (mString == other) return false;
     return strcmp(mString, other) > 0;
 }
 
 #if __cplusplus >= 202002L
 inline std::strong_ordering String8::operator<=>(const char* other) const {
+    if (mString == other) {
+        return std::strong_ordering::equal;
+    }
     int result = strcmp(mString, other);
     if (result == 0) {
         return std::strong_ordering::equal;
@@ -375,18 +392,15 @@ inline String8::operator const char*() const
     return mString;
 }
 
-#ifdef HAS_STRING_VIEW
+inline String8::String8(std::string_view o) : String8(o.data(), o.length()) { }
+
 inline String8::operator std::string_view() const
 {
     return {mString, length()};
 }
-#endif
 
 }  // namespace android
 
 // ---------------------------------------------------------------------------
-
-#undef HAS_STRING
-#undef HAS_STRING_VIEW
 
 #endif // ANDROID_STRING8_H

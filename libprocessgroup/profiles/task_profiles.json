@@ -597,7 +597,7 @@
           "Params":
           {
             "Name": "MemSoftLimit",
-            "Value": "16MB"
+            "Value": "16M"
           }
         },
         {
@@ -619,7 +619,7 @@
           "Params":
           {
             "Name": "MemSoftLimit",
-            "Value": "512MB"
+            "Value": "512M"
           }
         },
         {
@@ -641,6 +641,42 @@
           {
             "Controller": "memory",
             "Path": "system"
+          }
+        }
+      ]
+    },
+    {
+      "Name": "CompactFull",
+      "Actions": [
+        {
+          "Name": "Compact",
+          "Params":
+          {
+            "Type": "full"
+          }
+        }
+      ]
+    },
+    {
+      "Name": "CompactAnon",
+      "Actions": [
+        {
+          "Name": "Compact",
+          "Params":
+          {
+            "Type": "anon"
+          }
+        }
+      ]
+    },
+    {
+      "Name": "CompactFile",
+      "Actions": [
+        {
+          "Name": "Compact",
+          "Params":
+          {
+            "Type": "file"
           }
         }
       ]

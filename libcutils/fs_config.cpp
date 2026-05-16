@@ -22,7 +22,6 @@
 
 #define LOG_TAG "fs_config"
 
-#include <errno.h>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <stdint.h>
@@ -34,9 +33,10 @@
 
 #include <string>
 
+#include <android-base/logging.h>
 #include <android-base/strings.h>
+#include <android-base/unique_fd.h>
 #include <cutils/fs.h>
-#include <log/log.h>
 #include <private/android_filesystem_config.h>
 
 #include "fs_config.h"
@@ -72,20 +72,14 @@ static const struct fs_path_config android_dirs[] = {
     { 00771, AID_SYSTEM,       AID_SYSTEM,       0, "data" },
     { 00755, AID_ROOT,         AID_SYSTEM,       0, "mnt" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "product/bin" },
-    { 00751, AID_ROOT,         AID_SHELL,        0, "product/apex/*/bin" },
     { 00777, AID_ROOT,         AID_ROOT,         0, "sdcard" },
     { 00751, AID_ROOT,         AID_SDCARD_R,     0, "storage" },
-    { 00750, AID_ROOT,         AID_SYSTEM,       0, "system/apex/com.android.tethering/bin/for-system" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system/bin" },
     { 00755, AID_ROOT,         AID_ROOT,         0, "system/etc/ppp" },
     { 00755, AID_ROOT,         AID_SHELL,        0, "system/vendor" },
     { 00750, AID_ROOT,         AID_SHELL,        0, "system/xbin" },
-    { 00751, AID_ROOT,         AID_SHELL,        0, "system/apex/*/bin" },
-    { 00750, AID_ROOT,         AID_SYSTEM,       0, "system_ext/apex/com.android.tethering/bin/for-system" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "system_ext/bin" },
-    { 00751, AID_ROOT,         AID_SHELL,        0, "system_ext/apex/*/bin" },
     { 00751, AID_ROOT,         AID_SHELL,        0, "vendor/bin" },
-    { 00751, AID_ROOT,         AID_SHELL,        0, "vendor/apex/*/bin" },
     { 00755, AID_ROOT,         AID_SHELL,        0, "vendor" },
     {},
         // clang-format on
@@ -149,9 +143,11 @@ static const struct fs_path_config android_files[] = {
     { 00444, AID_ROOT,      AID_ROOT,      0, oem_conf_dir + 1 },
     { 00444, AID_ROOT,      AID_ROOT,      0, oem_conf_file + 1 },
     { 00600, AID_ROOT,      AID_ROOT,      0, "product/build.prop" },
+    { 00600, AID_ROOT,      AID_ROOT,      0, "product/etc/build.prop" },
     { 00444, AID_ROOT,      AID_ROOT,      0, product_conf_dir + 1 },
     { 00444, AID_ROOT,      AID_ROOT,      0, product_conf_file + 1 },
     { 00600, AID_ROOT,      AID_ROOT,      0, "system_ext/build.prop" },
+    { 00600, AID_ROOT,      AID_ROOT,      0, "system_ext/etc/build.prop" },
     { 00444, AID_ROOT,      AID_ROOT,      0, system_ext_conf_dir + 1 },
     { 00444, AID_ROOT,      AID_ROOT,      0, system_ext_conf_file + 1 },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/bin/crash_dump32" },
@@ -182,8 +178,6 @@ static const struct fs_path_config android_files[] = {
 
     // the following files have enhanced capabilities and ARE included
     // in user builds.
-    { 06755, AID_CLAT,      AID_CLAT,      0, "system/apex/com.android.tethering/bin/for-system/clatd" },
-    { 06755, AID_CLAT,      AID_CLAT,      0, "system_ext/apex/com.android.tethering/bin/for-system/clatd" },
     { 00700, AID_SYSTEM,    AID_SHELL,     CAP_MASK_LONG(CAP_BLOCK_SUSPEND),
                                               "system/bin/inputflinger" },
     { 00750, AID_ROOT,      AID_SHELL,     CAP_MASK_LONG(CAP_SETUID) |
@@ -205,6 +199,7 @@ static const struct fs_path_config android_files[] = {
     { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage_ramdisk/system/bin/fsck.f2fs" },
     // generic defaults
     { 00755, AID_ROOT,      AID_ROOT,      0, "bin/*" },
+    { 00755, AID_ROOT,      AID_ROOT,      0, "first_stage.sh"},
     { 00640, AID_ROOT,      AID_SHELL,     0, "fstab.*" },
     { 00750, AID_ROOT,      AID_SHELL,     0, "init*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "*.rc" },
@@ -213,23 +208,19 @@ static const struct fs_path_config android_files[] = {
     { 00644, AID_ROOT,      AID_ROOT,      0, "odm/app/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "odm/priv-app/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "product/bin/*" },
-    { 00755, AID_ROOT,      AID_SHELL,     0, "product/apex/*bin/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "product/framework/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "product/app/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "product/priv-app/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system/xbin/*" },
-    { 00755, AID_ROOT,      AID_SHELL,     0, "system/apex/*/bin/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system/framework/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system/app/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system/priv-app/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "system_ext/bin/*" },
-    { 00755, AID_ROOT,      AID_SHELL,     0, "system_ext/apex/*/bin/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system_ext/framework/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system_ext/app/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "system_ext/priv-app/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/bin/*" },
-    { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/apex/*bin/*" },
     { 00755, AID_ROOT,      AID_SHELL,     0, "vendor/xbin/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "vendor/framework/*" },
     { 00644, AID_ROOT,      AID_ROOT,      0, "vendor/app/*" },
@@ -326,60 +317,44 @@ auto __for_testing_only__fs_config_cmp = fs_config_cmp;
 
 bool get_fs_config(const char* path, bool dir, const char* target_out_path,
                    struct fs_config* fs_conf) {
-    const struct fs_path_config* pc;
-    size_t which, plen;
-
     if (path[0] == '/') {
         path++;
     }
 
-    plen = strlen(path);
+    size_t plen = strlen(path);
 
-    for (which = 0; which < (sizeof(conf) / sizeof(conf[0])); ++which) {
+    for (size_t which = 0; which < (sizeof(conf) / sizeof(conf[0])); ++which) {
+        android::base::unique_fd fd(fs_config_open(dir, which, target_out_path));
+        if (!fd.ok()) continue;
+
         struct fs_path_config_from_file header;
-
-        int fd = fs_config_open(dir, which, target_out_path);
-        if (fd < 0) continue;
-
-        while (TEMP_FAILURE_RETRY(read(fd, &header, sizeof(header))) == sizeof(header)) {
-            char* prefix;
-            uint16_t host_len = header.len;
-            ssize_t len, remainder = host_len - sizeof(header);
+        while (TEMP_FAILURE_RETRY(read(fd.get(), &header, sizeof(header))) == sizeof(header)) {
+            ssize_t remainder = header.len - sizeof(header);
             if (remainder <= 0) {
-                ALOGE("%s len is corrupted", conf[which][dir]);
+                LOG(ERROR) << conf[which][dir] << " len too short";
                 break;
             }
-            prefix = static_cast<char*>(calloc(1, remainder));
-            if (!prefix) {
-                ALOGE("%s out of memory", conf[which][dir]);
+            std::string prefix(remainder, '\0');
+            if (TEMP_FAILURE_RETRY(read(fd.get(), &prefix[0], remainder)) != remainder) {
+                LOG(ERROR)<< conf[which][dir] << " prefix is truncated";
                 break;
             }
-            if (TEMP_FAILURE_RETRY(read(fd, prefix, remainder)) != remainder) {
-                free(prefix);
-                ALOGE("%s prefix is truncated", conf[which][dir]);
+            size_t len = strnlen(prefix.data(), remainder);
+            if (len >= static_cast<size_t>(remainder)) {
+                LOG(ERROR) << conf[which][dir] << " missing terminating NUL";
                 break;
             }
-            len = strnlen(prefix, remainder);
-            if (len >= remainder) {  // missing a terminating null
-                free(prefix);
-                ALOGE("%s is corrupted", conf[which][dir]);
-                break;
-            }
-            if (fs_config_cmp(dir, prefix, len, path, plen)) {
-                free(prefix);
-                close(fd);
+            if (fs_config_cmp(dir, prefix.data(), len, path, plen)) {
                 fs_conf->uid = header.uid;
                 fs_conf->gid = header.gid;
                 fs_conf->mode = header.mode;
                 fs_conf->capabilities = header.capabilities;
                 return true;
             }
-            free(prefix);
         }
-        close(fd);
     }
 
-    for (pc = dir ? android_dirs : android_files; pc->prefix; pc++) {
+    for (const struct fs_path_config* pc = dir ? android_dirs : android_files; pc->prefix; pc++) {
         if (fs_config_cmp(dir, pc->prefix, strlen(pc->prefix), path, plen)) {
             fs_conf->uid = pc->uid;
             fs_conf->gid = pc->gid;

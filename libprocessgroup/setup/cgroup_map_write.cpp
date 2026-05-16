@@ -27,9 +27,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <optional>
-
-#include <android-base/file.h>
 #include <android-base/logging.h>
 #include <processgroup/cgroup_descriptor.h>
 #include <processgroup/processgroup.h>
@@ -177,7 +174,7 @@ static bool ActivateV2CgroupController(const CgroupDescriptor& descriptor) {
 
     if (!Mkdir(controller->path(), descriptor.mode(), descriptor.uid(), descriptor.gid())) {
         LOG(ERROR) << "Failed to create directory for " << controller->name() << " cgroup";
-        return false;
+        return descriptor.controller()->flags() & CGROUPRC_CONTROLLER_FLAG_OPTIONAL;
     }
 
     return ::ActivateControllers(controller->path(), {{controller->name(), descriptor}});
@@ -192,22 +189,19 @@ static bool MountV1CgroupController(const CgroupDescriptor& descriptor) {
         return false;
     }
 
-    // Unfortunately historically cpuset controller was mounted using a mount command
-    // different from all other controllers. This results in controller attributes not
-    // to be prepended with controller name. For example this way instead of
-    // /dev/cpuset/cpuset.cpus the attribute becomes /dev/cpuset/cpus which is what
-    // the system currently expects.
-    int res;
+    std::string options = controller->name();
+
     if (!strcmp(controller->name(), "cpuset")) {
-        // mount cpuset none /dev/cpuset nodev noexec nosuid
-        res = mount("none", controller->path(), controller->name(),
-                    MS_NODEV | MS_NOEXEC | MS_NOSUID, nullptr);
-    } else {
-        // mount cgroup none <path> nodev noexec nosuid <controller>
-        res = mount("none", controller->path(), "cgroup", MS_NODEV | MS_NOEXEC | MS_NOSUID,
-                    controller->name());
+        // Android depends on the noprefix option for cpuset so that cgroupfs files are not prefixed
+        // with the controller name. For example /dev/cpuset/cpus instead of
+        //                                       /dev/cpuset/cpuset.cpus.
+        // cpuset_v2_mode is required to restore the original cpu mask after a cpu is offlined, and
+        // then onlined in cgroup v1.
+        options += ",noprefix,cpuset_v2_mode";
     }
-    if (res != 0) {
+
+    if (mount("none", controller->path(), "cgroup", MS_NODEV | MS_NOEXEC | MS_NOSUID,
+              options.c_str())) {
         if (IsOptionalController(controller)) {
             PLOG(INFO) << "Failed to mount optional controller " << controller->name();
             return true;
@@ -260,39 +254,6 @@ void CgroupDescriptor::set_mounted(bool mounted) {
     controller_.set_flags(flags);
 }
 
-static std::optional<bool> MGLRUDisabled() {
-    const std::string file_name = "/sys/kernel/mm/lru_gen/enabled";
-    std::string content;
-    if (!android::base::ReadFileToString(file_name, &content)) {
-        PLOG(ERROR) << "Failed to read MGLRU state from " << file_name;
-        return {};
-    }
-
-    return content == "0x0000";
-}
-
-static std::optional<bool> MEMCGDisabled(const CgroupDescriptorMap& descriptors) {
-    std::string cgroup_v2_root = CGROUP_V2_ROOT_DEFAULT;
-    const auto it = descriptors.find(CGROUPV2_HIERARCHY_NAME);
-    if (it == descriptors.end()) {
-        LOG(WARNING) << "No Cgroups2 path found in cgroups.json. Vendor has modified Android, and "
-                     << "kernel memory use will be higher than intended.";
-    } else if (it->second.controller()->path() != cgroup_v2_root) {
-        cgroup_v2_root = it->second.controller()->path();
-    }
-
-    const std::string file_name = cgroup_v2_root + "/cgroup.controllers";
-    std::string content;
-    if (!android::base::ReadFileToString(file_name, &content)) {
-        PLOG(ERROR) << "Failed to read cgroup controllers from " << file_name;
-        return {};
-    }
-
-    // If we've forced memcg to v2 and it's not available, then it could only have been disabled
-    // on the kernel command line (GKI sets CONFIG_MEMCG).
-    return content.find("memory") == std::string::npos;
-}
-
 static bool CreateV2SubHierarchy(const std::string& path, const CgroupDescriptorMap& descriptors) {
     const auto cgv2_iter = descriptors.find(CGROUPV2_HIERARCHY_NAME);
     if (cgv2_iter == descriptors.end()) return false;
@@ -330,19 +291,8 @@ bool CgroupSetup() {
         }
 
         if (!SetupCgroup(descriptor)) {
-            // issue a warning and proceed with the next cgroup
-            LOG(WARNING) << "Failed to setup " << name << " cgroup";
-        }
-    }
-
-    if (android::libprocessgroup_flags::force_memcg_v2()) {
-        if (MGLRUDisabled().value_or(false)) {
-            LOG(WARNING) << "Memcg forced to v2 hierarchy with MGLRU disabled! "
-                         << "Global reclaim performance will suffer.";
-        }
-        if (MEMCGDisabled(descriptors).value_or(false)) {
-            LOG(WARNING) << "Memcg forced to v2 hierarchy while memcg is disabled by kernel "
-                         << "command line!";
+            LOG(ERROR) << "Failed to setup " << name << " cgroup";
+            return false;
         }
     }
 

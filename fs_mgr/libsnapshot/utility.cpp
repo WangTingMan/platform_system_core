@@ -26,6 +26,7 @@
 #include <android-base/parseint.h>
 #include <android-base/properties.h>
 #include <android-base/strings.h>
+#include <com_android_libsnapshot.h>
 #include <fs_mgr/roots.h>
 #include <liblp/property_fetcher.h>
 
@@ -199,10 +200,26 @@ bool WriteStringToFileAtomic(const std::string& content, const std::string& path
 }
 
 std::ostream& operator<<(std::ostream& os, const Now&) {
-    struct tm now{};
+    struct tm now {};
     time_t t = time(nullptr);
     localtime_r(&t, &now);
     return os << std::put_time(&now, "%Y%m%d-%H%M%S");
+}
+
+std::ostream& operator<<(std::ostream& os, CancelResult result) {
+    switch (result) {
+        case CancelResult::OK:
+            return os << "ok";
+        case CancelResult::ERROR:
+            return os << "error";
+        case CancelResult::LIVE_SNAPSHOTS:
+            return os << "live_snapshots";
+        case CancelResult::NEEDS_MERGE:
+            return os << "needs_merge";
+        default:
+            LOG(ERROR) << "Unknown cancel result: " << static_cast<uint32_t>(result);
+            return os;
+    }
 }
 
 void AppendExtent(RepeatedPtrField<chromeos_update_engine::Extent>* extents, uint64_t start_block,
@@ -277,6 +294,16 @@ bool GetODirectEnabledProperty() {
     return fetcher->GetBoolProperty("ro.virtual_ab.o_direct.enabled", false);
 }
 
+bool GetSkipVerificationProperty() {
+    auto fetcher = IPropertyFetcher::GetInstance();
+    return fetcher->GetBoolProperty("ro.virtual_ab.skip_verification", false);
+}
+
+bool GetUblkEnabledProperty() {
+    auto fetcher = IPropertyFetcher::GetInstance();
+    return fetcher->GetBoolProperty("ro.virtual_ab.ublk.enabled", false);
+}
+
 std::string GetOtherPartitionName(const std::string& name) {
     auto suffix = android::fs_mgr::GetPartitionSlotSuffix(name);
     CHECK(suffix == "_a" || suffix == "_b");
@@ -293,6 +320,16 @@ bool IsDmSnapshotTestingEnabled() {
 bool KernelSupportsCompressedSnapshots() {
     auto& dm = DeviceMapper::Instance();
     return dm.GetTargetByName("user", nullptr);
+}
+
+static bool IsDebuggable() {
+    return android::base::GetBoolProperty("ro.debuggable", false);
+}
+
+bool GetDebugFlag(const std::string& flag) {
+    auto fetcher = IPropertyFetcher::GetInstance();
+    std::string prop_name = "persist.virtual_ab.testing." + flag;
+    return IsDebuggable() && fetcher->GetBoolProperty(prop_name, false);
 }
 
 }  // namespace snapshot

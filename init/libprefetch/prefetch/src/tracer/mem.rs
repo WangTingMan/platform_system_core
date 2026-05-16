@@ -96,10 +96,10 @@ fn makedev(major: MajorMinorType, minor: MajorMinorType) -> DeviceNumber {
 fn build_device_number(major: &str, minor: &str) -> Result<DeviceNumber, Error> {
     Ok(makedev(
         major.parse::<MajorMinorType>().map_err(|e| Error::Custom {
-            error: format!("Failed to parse major number from {} with {}", major, e),
+            error: format!("Failed to parse major number from {major} with {e}"),
         })?,
         minor.parse::<MajorMinorType>().map_err(|e| Error::Custom {
-            error: format!("Failed to parse major number from {} with {}", major, e),
+            error: format!("Failed to parse major number from {major} with {e}"),
         })?,
     ))
 }
@@ -107,10 +107,10 @@ fn build_device_number(major: &str, minor: &str) -> Result<DeviceNumber, Error> 
 // Returns timestamp in nanoseconds
 fn build_timestamp(seconds: &str, microseconds: &str) -> Result<u64, Error> {
     let seconds = seconds.parse::<u64>().map_err(|e| Error::Custom {
-        error: format!("Failed to parse seconds from {} with {}", seconds, e),
+        error: format!("Failed to parse seconds from {seconds} with {e}"),
     })?;
     let microseconds = microseconds.parse::<u64>().map_err(|e| Error::Custom {
-        error: format!("Failed to parse microseconds from {} with {}", seconds, e),
+        error: format!("Failed to parse microseconds from {seconds} with {e}"),
     })?;
     Ok((seconds * 1_000_000_000) + (microseconds * 1_000))
 }
@@ -178,21 +178,35 @@ struct MountInfo {
 
 impl MountInfo {
     // Parses file at `path` to build `Self`.`
-    fn create(path: &str) -> Result<Self, Error> {
+    fn create(
+        path: &str,
+        exclude_mount_prefix: &[String],
+        include_mount_prefix: &[String],
+    ) -> Result<Self, Error> {
         let buf = read_to_string(path)
-            .map_err(|e| Error::Read { error: format!("Reading {} failed with: {}", path, e) })?;
-        Self::with_buf(&buf)
+            .map_err(|e| Error::Read { error: format!("Reading {path} failed with: {e}") })?;
+        Self::with_buf(&buf, exclude_mount_prefix, include_mount_prefix)
     }
 
     // Parses string in `buf` to build `Self`.
-    fn with_buf(buf: &str) -> Result<Self, Error> {
+    fn with_buf(
+        buf: &str,
+        exclude_mount_prefix: &[String],
+        include_mount_prefix: &[String],
+    ) -> Result<Self, Error> {
         let regex = Self::get_regex()?;
         let mut included_devices: HashMap<DeviceNumber, PathBuf> = HashMap::new();
         let mut excluded_devices = HashSet::new();
         let excluded_filesystem_types: HashSet<String> =
             EXCLUDED_FILESYSTEM_TYPES.iter().map(|s| String::from(*s)).collect();
         for line in buf.lines() {
-            if let Some(state) = Self::parse_line(&regex, &excluded_filesystem_types, line)? {
+            if let Some(state) = Self::parse_line(
+                &regex,
+                &excluded_filesystem_types,
+                exclude_mount_prefix,
+                include_mount_prefix,
+                line,
+            )? {
                 match state {
                     DeviceState::Include((device, path)) => {
                         included_devices.insert(device, path);
@@ -210,6 +224,8 @@ impl MountInfo {
     fn parse_line(
         re: &Regex,
         excluded_filesystem_types: &HashSet<String>,
+        exclude_mount_prefix: &[String],
+        include_mount_prefix: &[String],
         line: &str,
     ) -> Result<Option<DeviceState>, Error> {
         let caps = match re.captures(line) {
@@ -223,26 +239,30 @@ impl MountInfo {
         }
 
         let mount_point = &caps["mount_point"];
-        let mnt_pnt_with_slash = format!("{}/", mount_point);
+        let mnt_pnt_with_slash = format!("{mount_point}/");
         let device_number = build_device_number(&caps["major"], &caps["minor"])?;
         let fs_type = &caps["fs_type"];
 
         if excluded_filesystem_types.contains(fs_type) {
             info!(
-                "excluding fs type: {} for {} mount-point {} slash {}",
-                fs_type, line, mount_point, mnt_pnt_with_slash
+                "excluding fs type: {fs_type} for {line} mount-point {mount_point} slash {mnt_pnt_with_slash}"
             );
             return Ok(Some(DeviceState::Exclude(device_number)));
         }
 
-        for excluded in EXCLUDE_PATHS {
+        for excluded in exclude_mount_prefix {
             if mnt_pnt_with_slash.starts_with(excluded) {
                 info!(
-                    "exclude-paths fs type: {} for {} mount-point {} slash {}",
-                    fs_type, line, mount_point, mnt_pnt_with_slash
+                    "exclude-paths fs type: {fs_type} for {line} mount-point {mount_point} slash {mnt_pnt_with_slash}"
                 );
                 return Ok(Some(DeviceState::Exclude(device_number)));
             }
+        }
+
+        if !include_mount_prefix.is_empty()
+            && !include_mount_prefix.iter().any(|p| mnt_pnt_with_slash.starts_with(p))
+        {
+            return Ok(None);
         }
 
         Ok(Some(DeviceState::Include((device_number, PathBuf::from(mount_point)))))
@@ -262,7 +282,7 @@ impl MountInfo {
             r"\s+(?P<device_path>\S+)"
         ))
         .map_err(|e| Error::Custom {
-            error: format!("create regex for parsing mountinfo failed with: {}", e),
+            error: format!("create regex for parsing mountinfo failed with: {e}"),
         })
     }
 
@@ -281,6 +301,8 @@ struct TraceLineInfo {
     inode: InodeNumber,
     offset: u64,
     timestamp: u64,
+    // Only supported in kernel 6.x (with page cache folio support).
+    order: Option<u32>,
 }
 
 impl TraceLineInfo {
@@ -294,15 +316,24 @@ impl TraceLineInfo {
         let ino = &caps["ino"];
         let offset = &caps["offset"];
         let timestamp = build_timestamp(&caps["seconds"], &caps["microseconds"])?;
+        let order = caps
+            .name("order")
+            .map(|m| {
+                m.as_str().parse::<u32>().map_err(|e| Error::Custom {
+                    error: format!("failed parsing order: {} : {}", m.as_str(), e),
+                })
+            })
+            .transpose()?;
         Ok(Some(TraceLineInfo {
             device: build_device_number(major, minor)?,
             inode: u64::from_str_radix(ino, 16).map_err(|e| Error::Custom {
-                error: format!("failed parsing inode: {} : {}", ino, e),
+                error: format!("failed parsing inode: {ino} : {e}"),
             })?,
             offset: offset.parse::<u64>().map_err(|e| Error::Custom {
-                error: format!("failed parsing offset: {} : {}", offset, e),
+                error: format!("failed parsing offset: {offset} : {e}"),
             })?,
             timestamp,
+            order,
         }))
     }
 
@@ -313,15 +344,16 @@ impl TraceLineInfo {
         inode: u64,
         offset: u64,
         timestamp: u64,
+        order: Option<u32>,
     ) -> Self {
-        Self { device: makedev(major, minor), inode, offset, timestamp }
+        Self { device: makedev(major, minor), inode, offset, timestamp, order }
     }
 
     // Convenience function to create regex. Used once per life of `record` but multiple times in
     // case of tests.
     pub fn get_trace_line_regex() -> Result<Regex, Error> {
-        // TODO: Fix this Regex expression for 5.15 kernels. This expression
-        // works only on 6.1+. Prior to 6.1, "<page>" was present in the output.
+        // `page=[hex]` entry exists in 5.x kernel format but not in 6.x.
+        // Conversely, `order=[digit]` entry exists in 6.x kernel format but not in 5.x.
         Regex::new(concat!(
             r"^\s+(?P<cmd_pid>\S+)",
             r"\s+(?P<cpu>\S+)",
@@ -330,13 +362,12 @@ impl TraceLineInfo {
             r"\s+mm_filemap_add_to_page_cache:",
             r"\s+dev\s+(?P<major>[0-9]+):(?P<minor>[0-9]+)",
             r"\s+ino\s+(?P<ino>\S+)",
-            //r"\s+(?P<page>\S+)",
+            r"(?:\s+(?P<page>page=\S+))?",
             r"\s+(?P<pfn>\S+)",
-            r"\s+ofs=(?P<offset>[0-9]+)"
+            r"\s+ofs=(?P<offset>[0-9]+)",
+            r"(?:\s+order=(?P<order>\S+))?"
         ))
-        .map_err(|e| Error::Custom {
-            error: format!("create regex for tracing failed with: {}", e),
-        })
+        .map_err(|e| Error::Custom { error: format!("create regex for tracing failed with: {e}") })
     }
 }
 
@@ -398,7 +429,7 @@ pub(crate) struct MemTraceSubsystem {
 impl MemTraceSubsystem {
     pub fn update_configs(configs: &mut TracerConfigs) {
         for path in EXCLUDE_PATHS {
-            configs.excluded_paths.push(path.to_owned().to_string());
+            configs.exclude_mount_prefix.push(path.to_owned().to_string());
         }
 
         for event in TRACE_EVENTS {
@@ -409,11 +440,15 @@ impl MemTraceSubsystem {
 
     pub fn create_with_configs(tracer_configs: TracerConfigs) -> Result<Self, Error> {
         static INITIAL_RECORDS_CAPACITY: usize = 100_000;
-        debug!("TracerConfig: {:#?}", tracer_configs);
+        debug!("TracerConfig: {tracer_configs:#?}");
 
         let regex = TraceLineInfo::get_trace_line_regex()?;
-        let mount_info = MountInfo::create(tracer_configs.mountinfo_path.as_ref().unwrap())?;
-        debug!("mountinfo: {:#?}", mount_info);
+        let mount_info = MountInfo::create(
+            tracer_configs.mountinfo_path.as_ref().unwrap(),
+            &tracer_configs.exclude_mount_prefix,
+            &tracer_configs.include_mount_prefix,
+        )?;
+        debug!("mountinfo: {mount_info:#?}");
 
         Ok(Self {
             device_inode_map: HashMap::new(),
@@ -522,10 +557,12 @@ impl TraceSubsystem for MemTraceSubsystem {
                 .unwrap()
                 .insert(info.inode, file_id.clone());
 
+            let length = self.page_size << info.order.unwrap_or(0);
+
             self.records.push(Record {
                 file_id,
                 offset: info.offset,
-                length: self.page_size,
+                length,
                 timestamp: info.timestamp,
             });
         }
@@ -551,7 +588,11 @@ impl TraceSubsystem for MemTraceSubsystem {
         // the system was in early boot phase. Reload the mount_info so as to get
         // current/new mount points.
         if let Some(tracer_config) = &self.tracer_configs {
-            self.mount_info = MountInfo::create(tracer_config.mountinfo_path.as_ref().unwrap())?;
+            self.mount_info = MountInfo::create(
+                tracer_config.mountinfo_path.as_ref().unwrap(),
+                &tracer_config.exclude_mount_prefix,
+                &tracer_config.include_mount_prefix,
+            )?;
             debug!("reloaded mountinfo: {:#?}", self.mount_info);
         }
 
@@ -564,7 +605,7 @@ impl TraceSubsystem for MemTraceSubsystem {
 
             if inode_map.is_empty() {
                 return Err(Error::Custom {
-                    error: format!("Unexpected empty records for {:?}", root_path),
+                    error: format!("Unexpected empty records for {root_path:?}"),
                 });
             }
 
@@ -675,6 +716,7 @@ mod tests {
     use nix::sys::stat::{major, minor};
     use std::assert_eq;
     use std::path::Path;
+    use tempfile::NamedTempFile;
 
     use crate::tracer::tests::{copy_uncached_files_and_record_from, setup_test_dir};
 
@@ -682,31 +724,44 @@ mod tests {
 
     use super::*;
 
-    static TRACE_BUFFER: &str = r#"
- Settingide-502  [001] ....   484.360292: mm_filemap_add_to_page_CACHE: dev 254:6 ino cf1 page=68d477 pfn=59833 ofs=32768
- Settingide-502  [001] ....   484.360311: mm_filemap_add_to_page_cache: dev 254:6 ino cf1 page=759458 pfn=59827 ofs=57344
- BOX_ENTDED-3071 [001] ....   485.276715: mm_filemap_add_to_pag_ecache: dev 254:6 ino 1 page=00cc1c pfn=81748 ofs=13574144
- BOX_ENTDED-3071 [001] ....   485.276990: mm_filemap_add_to_page_cache: dev 254:6 ino cf2 page=36540b pfn=60952 ofs=0
- .gms.peent-843  [001] ....   485.545516: mm_filemap_add_to_page_cache: dev 254:6 ino 1 page=002e8b pfn=58928 ofs=13578240
- .gms.peent-843  [001] ....   485.545820: mm_filemap_add_to_page_cache: dev 254:6 ino cf3 page=6233ce pfn=58108 ofs=0
-      an.bg-459  [001] ....   494.029396: mm_filemap_add_to_page_cache: dev 254:3 ino 7cf page=c5b5c7 pfn=373933 ofs=1310720
-      an.bg-459  [001] ....   494.029398: mm_filemap_add_to_page_cache: dev 254:3 ino 7cf page=b8b9ec pfn=410074 ofs=1314816
-       "#;
+    static TRACE_BUFFER: &str = concat!(
+        // kernel 5.x
+        " Settingide-502  [001] ....   484.360292: mm_filemap_add_to_page_CACHE: dev 254:6 ino cf1 page=68d477 pfn=59833 ofs=32768\n",
+        " Settingide-502  [001] ....   484.360311: mm_filemap_add_to_page_cache: dev 254:6 ino cf1 page=759458 pfn=59827 ofs=57344\n",
+        " BOX_ENTDED-3071 [001] ....   485.276715: mm_filemap_add_to_pag_ecache: dev 254:6 ino 1 page=00cc1c pfn=81748 ofs=13574144\n",
+        " BOX_ENTDED-3071 [001] ....   485.276990: mm_filemap_add_to_page_cache: dev 254:6 ino cf2 page=36540b pfn=60952 ofs=0\n",
+        " .gms.peent-843  [001] ....   485.545516: mm_filemap_add_to_page_cache: dev 254:6 ino 1 page=002e8b pfn=58928 ofs=13578240\n",
+        " .gms.peent-843  [001] ....   485.545820: mm_filemap_add_to_page_cache: dev 254:6 ino cf3 page=6233ce pfn=58108 ofs=0\n",
+        "      an.bg-459  [001] ....   494.029396: mm_filemap_add_to_page_cache: dev 254:3 ino 7cf page=c5b5c7 pfn=373933 ofs=1310720\n",
+        "      an.bg-459  [001] ....   494.029398: mm_filemap_add_to_page_cache: dev 254:3 ino 7cf page=b8b9ec pfn=410074 ofs=1314816\n",
+
+        // kernel 6.x
+        " logcat-686     [006] ..... 148216.040320: mm_filemap_add_to_page_CACHE: dev 254:85 ino 3f15 pfn=0x213bc2 ofs=528384 order=0\n",
+        " logcat-686     [001] ..... 148217.776227: mm_filemap_add_to_page_cache: dev 254:85 ino 3f15 pfn=0x21d306 ofs=532480 order=0\n",
+        " logcat-686     [003] ..... 148219.044389: mm_filemap_add_to_pag_ecache: dev 254:85 ino 3f15 pfn=0x224b8d ofs=536576 order=0\n",
+        " logcat-686     [001] ..... 148220.780964: mm_filemap_add_to_page_cache: dev 254:85 ino 3f15 pfn=0x1bfe0a ofs=540672 order=0\n",
+        " logcat-686     [001] ..... 148223.046560: mm_filemap_add_to_page_cache: dev 254:85 ino 3f15 pfn=0x1f3d29 ofs=544768 order=1",
+    );
 
     fn sample_mem_traces() -> (String, Vec<Option<TraceLineInfo>>) {
         (
             TRACE_BUFFER.to_owned(),
             vec![
+                // 5.x
                 None,
+                Some(TraceLineInfo::from_fields(254, 6, 0xcf1, 57344, 484360311000, None)),
                 None,
-                Some(TraceLineInfo::from_fields(254, 6, 0xcf1, 57344, 484360311000)),
+                Some(TraceLineInfo::from_fields(254, 6, 0xcf2, 0, 485276990000, None)),
+                Some(TraceLineInfo::from_fields(254, 6, 0x1, 13578240, 485545516000, None)),
+                Some(TraceLineInfo::from_fields(254, 6, 0xcf3, 0, 485545820000, None)),
+                Some(TraceLineInfo::from_fields(254, 3, 0x7cf, 1310720, 494029396000, None)),
+                Some(TraceLineInfo::from_fields(254, 3, 0x7cf, 1314816, 494029398000, None)),
+                // 6.x
                 None,
-                Some(TraceLineInfo::from_fields(254, 6, 0xcf2, 0, 485276990000)),
-                Some(TraceLineInfo::from_fields(254, 6, 0x1, 13578240, 485545516000)),
-                Some(TraceLineInfo::from_fields(254, 6, 0xcf3, 0, 485545820000)),
-                Some(TraceLineInfo::from_fields(254, 3, 0x7cf, 1310720, 494029396000)),
-                Some(TraceLineInfo::from_fields(254, 3, 0x7cf, 1314816, 494029398000)),
+                Some(TraceLineInfo::from_fields(254, 85, 0x3f15, 532480, 148217776227000, Some(0))),
                 None,
+                Some(TraceLineInfo::from_fields(254, 85, 0x3f15, 540672, 148220780964000, Some(0))),
+                Some(TraceLineInfo::from_fields(254, 85, 0x3f15, 544768, 148223046560000, Some(1))),
             ],
         )
     }
@@ -730,7 +785,7 @@ mod tests {
         let test_base_dir = setup_test_dir();
         let (rf, mut files) =
             generate_cached_files_and_record(None, true, Some(page_size().unwrap() as u64));
-        let (_uncached_rf, uncached_files) =
+        let (_uncached_rf, uncached_files, _out_files) =
             copy_uncached_files_and_record_from(Path::new(&test_base_dir), &mut files, &rf);
         let mut mount_include = HashMap::new();
 
@@ -818,7 +873,7 @@ mod tests {
         let test_base_dir = setup_test_dir();
         let (rf, mut files) =
             generate_cached_files_and_record(None, true, Some(page_size().unwrap() as u64));
-        let (_uncached_rf, uncached_files) =
+        let (_uncached_rf, uncached_files, _out_files) =
             copy_uncached_files_and_record_from(Path::new(&test_base_dir), &mut files, &rf);
         let mut mount_include = HashMap::new();
 
@@ -893,5 +948,189 @@ mod tests {
                 new_record(1, 3 * pg_size, pg_size, 7000007000),
             ]
         );
+    }
+
+    struct FakeDevice {
+        major: MajorMinorType,
+        minor: MajorMinorType,
+        path: PathBuf,
+    }
+
+    fn create_fake_mountinfo_file(fake_devices: &Vec<FakeDevice>) -> NamedTempFile {
+        let mut mountinfo_path = NamedTempFile::new().unwrap();
+        for device in fake_devices {
+            mountinfo_path
+                .write_all(
+                    format!(
+                        "26 24 {}:{} / {} ro,nodev,noatime shared:1 - ext4 /dev/block/dm-3 ro,\
+                        seclabel,errors=panic\n",
+                        device.major,
+                        device.minor,
+                        device.path.to_str().unwrap()
+                    )
+                    .as_bytes(),
+                )
+                .unwrap();
+        }
+        mountinfo_path
+    }
+
+    fn create_fake_mountinfo(
+        exclude_mount_prefix: &[String],
+        include_mount_prefix: &[String],
+        fake_devices: Vec<FakeDevice>,
+    ) -> MountInfo {
+        let mountinfo = create_fake_mountinfo_file(&fake_devices);
+        let mountinfo_path = mountinfo.path().to_str().unwrap();
+
+        MountInfo::create(mountinfo_path, exclude_mount_prefix, include_mount_prefix).unwrap()
+    }
+
+    #[test]
+    fn test_mount_info() {
+        let mount_info = create_fake_mountinfo(
+            &vec![],
+            &vec![],
+            vec![
+                FakeDevice {
+                    major: 0 as MajorMinorType,
+                    minor: 1 as MajorMinorType,
+                    path: PathBuf::from("/normal"),
+                },
+                FakeDevice {
+                    major: 2 as MajorMinorType,
+                    minor: 3 as MajorMinorType,
+                    path: PathBuf::from("/excluded"),
+                },
+                FakeDevice {
+                    major: 4 as MajorMinorType,
+                    minor: 5 as MajorMinorType,
+                    path: PathBuf::from("/included"),
+                },
+            ],
+        );
+
+        let normal_device_number = makedev(0, 1);
+        let excluded_device_number = makedev(2, 3);
+        let included_device_number = makedev(4, 5);
+
+        // If no include/exclude mount points are specified, all devices should be included
+        assert!(mount_info.included_devices.contains_key(&normal_device_number));
+        assert!(mount_info.included_devices.contains_key(&included_device_number));
+        assert!(mount_info.included_devices.contains_key(&excluded_device_number));
+    }
+
+    #[test]
+    fn test_mountinfo_exclude_mount_prefix() {
+        let mount_info = create_fake_mountinfo(
+            &vec![String::from("/excluded")],
+            &vec![],
+            vec![
+                FakeDevice {
+                    major: 0 as MajorMinorType,
+                    minor: 1 as MajorMinorType,
+                    path: PathBuf::from("/normal"),
+                },
+                FakeDevice {
+                    major: 2 as MajorMinorType,
+                    minor: 3 as MajorMinorType,
+                    path: PathBuf::from("/excluded"),
+                },
+                FakeDevice {
+                    major: 4 as MajorMinorType,
+                    minor: 5 as MajorMinorType,
+                    path: PathBuf::from("/included"),
+                },
+            ],
+        );
+
+        let normal_device_number = makedev(0, 1);
+        let excluded_device_number = makedev(2, 3);
+        let included_device_number = makedev(4, 5);
+
+        // Devices in excluded mount point are excluded.
+        assert!(mount_info.included_devices.contains_key(&normal_device_number));
+        assert!(mount_info.included_devices.contains_key(&included_device_number));
+
+        assert!(!mount_info.included_devices.contains_key(&excluded_device_number));
+        assert!(mount_info.excluded_devices.contains(&excluded_device_number));
+    }
+
+    #[test]
+    fn test_mountinfo_include_mount_prefix() {
+        let mount_info = create_fake_mountinfo(
+            &vec![],
+            &vec![String::from("/included")],
+            vec![
+                FakeDevice {
+                    major: 0 as MajorMinorType,
+                    minor: 1 as MajorMinorType,
+                    path: PathBuf::from("/normal"),
+                },
+                FakeDevice {
+                    major: 2 as MajorMinorType,
+                    minor: 3 as MajorMinorType,
+                    path: PathBuf::from("/excluded"),
+                },
+                FakeDevice {
+                    major: 4 as MajorMinorType,
+                    minor: 5 as MajorMinorType,
+                    path: PathBuf::from("/included"),
+                },
+            ],
+        );
+
+        let normal_device_number = makedev(0, 1);
+        let excluded_device_number = makedev(2, 3);
+        let included_device_number = makedev(4, 5);
+
+        // Only devices on an included mount point are included.
+        assert!(mount_info.included_devices.contains_key(&included_device_number));
+
+        assert!(!mount_info.included_devices.contains_key(&normal_device_number));
+        assert!(!mount_info.included_devices.contains_key(&excluded_device_number));
+    }
+
+    #[test]
+    fn test_mountinfo_mixed_mount_prefix() {
+        let mount_info = create_fake_mountinfo(
+            &vec![String::from("/included/excluded")],
+            &vec![String::from("/included")],
+            vec![
+                FakeDevice {
+                    major: 0 as MajorMinorType,
+                    minor: 1 as MajorMinorType,
+                    path: PathBuf::from("/not_start_with/included"),
+                },
+                FakeDevice {
+                    major: 2 as MajorMinorType,
+                    minor: 3 as MajorMinorType,
+                    path: PathBuf::from("/included/not_start_with/excluded"),
+                },
+                FakeDevice {
+                    major: 4 as MajorMinorType,
+                    minor: 5 as MajorMinorType,
+                    path: PathBuf::from("/included/excluded"),
+                },
+                FakeDevice {
+                    major: 6 as MajorMinorType,
+                    minor: 7 as MajorMinorType,
+                    path: PathBuf::from("/included/not_excluded"),
+                },
+            ],
+        );
+
+        let not_start_with_included_device_number = makedev(0, 1);
+        let not_start_with_excluded_prefix_device_number = makedev(2, 3);
+        let excluded_device_number = makedev(4, 5);
+        let included_device_number = makedev(6, 7);
+
+        assert!(mount_info
+            .included_devices
+            .contains_key(&not_start_with_excluded_prefix_device_number));
+        assert!(mount_info.included_devices.contains_key(&included_device_number));
+
+        assert!(!mount_info.included_devices.contains_key(&not_start_with_included_device_number));
+        assert!(!mount_info.included_devices.contains_key(&excluded_device_number));
     }
 }

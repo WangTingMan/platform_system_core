@@ -116,7 +116,7 @@ std::unique_ptr<AutoDevice> SnapshotManagerStub::EnsureMetadataMounted() {
     return nullptr;
 }
 
-bool SnapshotManagerStub::UpdateUsesCompression() {
+bool SnapshotManagerStub::UpdateUsesSnapuserd() {
     LOG(ERROR) << __FUNCTION__ << " should never be called.";
     return false;
 }
@@ -186,6 +186,11 @@ std::string SnapshotManagerStub::ReadSourceBuildFingerprint() {
 
 void SnapshotManagerStub::SetMergeStatsFeatures(ISnapshotMergeStats*) {
     LOG(ERROR) << __FUNCTION__ << " should never be called.";
+}
+
+bool SnapshotManagerStub::IsCancelUpdateSafe() {
+    LOG(ERROR) << __FUNCTION__ << " should never be called.";
+    return false;
 }
 
 }  // namespace android::snapshot

@@ -123,6 +123,8 @@ bool FsyncDirectory(const char* dirname);
 struct Now {};
 std::ostream& operator<<(std::ostream& os, const Now&);
 
+std::ostream& operator<<(std::ostream& os, CancelResult);
+
 // Append to |extents|. Merged into the last element if possible.
 void AppendExtent(google::protobuf::RepeatedPtrField<chromeos_update_engine::Extent>* extents,
                   uint64_t start_block, uint64_t num_blocks);
@@ -134,11 +136,12 @@ bool GetUserspaceSnapshotsEnabledProperty();
 bool GetIouringEnabledProperty();
 bool GetXorCompressionEnabledProperty();
 bool GetODirectEnabledProperty();
-
+bool GetSkipVerificationProperty();
+bool GetUblkEnabledProperty();
 bool CanUseUserspaceSnapshots();
 bool IsDmSnapshotTestingEnabled();
 bool IsVendorFromAndroid12();
-
+bool GetDebugFlag(const std::string& flag);
 // Swap the suffix of a partition name.
 std::string GetOtherPartitionName(const std::string& name);
 

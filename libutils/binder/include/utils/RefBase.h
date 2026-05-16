@@ -742,7 +742,7 @@ public:
             virtual ~Renamer() { }
         };
 
-        memmove(dest, src, n*sizeof(sp<TYPE>));
+        memmove(static_cast<void*>(dest), src, n * sizeof(sp<TYPE>));
         TYPE::renameRefs(n, Renamer(dest, src));
     }
 
@@ -762,7 +762,7 @@ public:
             virtual ~Renamer() { }
         };
 
-        memmove(dest, src, n*sizeof(wp<TYPE>));
+        memmove(static_cast<void*>(dest), src, n * sizeof(wp<TYPE>));
         TYPE::renameRefs(n, Renamer(dest, src));
     }
 };

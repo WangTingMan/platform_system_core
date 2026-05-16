@@ -281,7 +281,7 @@ static_assert(sizeof(CowOperationV2) == sizeof(CowFooterOperation));
 enum CowCompressionAlgorithm : uint8_t {
     kCowCompressNone = 0,
     kCowCompressGz = 1,
-    kCowCompressBrotli = 2,
+    kCowCompressBrotliUnsupported = 2,
     kCowCompressLz4 = 3,
     kCowCompressZstd = 4,
 };
@@ -328,6 +328,16 @@ struct ScratchMetadata {
 struct BufferState {
     uint8_t read_ahead_state;
 } __attribute__((packed));
+
+constexpr size_t GetCowOpSize(size_t version) {
+    if (version == 3) {
+        return sizeof(CowOperationV3);
+    } else if (version == 2 || version == 1) {
+        return sizeof(CowOperationV2);
+    } else {
+        return 0;
+    }
+}
 
 // 2MB Scratch space used for read-ahead
 static constexpr uint64_t BUFFER_REGION_DEFAULT_SIZE = (1ULL << 21);

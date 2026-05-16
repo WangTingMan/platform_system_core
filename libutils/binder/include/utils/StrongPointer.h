@@ -21,6 +21,8 @@
 #include <type_traits>  // for common_type.
 #include <utils/utils_binder_export.h>
 
+#include <utils/AllocatorTracker.h>
+
 // ---------------------------------------------------------------------------
 namespace android {
 
@@ -52,6 +54,10 @@ public:
     //     friend class sp<Foo>;
     template <typename... Args>
     static inline sp<T> make(Args&&... args);
+
+    // Same as the above, but this will return nullptr if the allocation fails.
+    template <typename... Args>
+    static inline sp<T> makeNoThrow(Args&&... args);
 
     // if nullptr, returns nullptr
     //
@@ -205,10 +211,22 @@ LIBUTILSBINDERSDK_API void sp_report_race();
 template <typename T>
 template <typename... Args>
 sp<T> sp<T>::make(Args&&... args) {
-    T* t = new T(std::forward<Args>(args)...);
+    T* t = ANDROID_NEW(T, std::forward<Args>(args)...);
     sp<T> result;
     result.m_ptr = t;
     t->incStrong(t);
+    return result;
+}
+
+template <typename T>
+template <typename... Args>
+sp<T> sp<T>::makeNoThrow(Args&&... args) {
+    T* t = ANDROID_NEW_NOTHROW(T, std::forward<Args>(args)...);
+    sp<T> result;
+    result.m_ptr = t;
+    if (t != nullptr) {
+        t->incStrong(t);
+    }
     return result;
 }
 

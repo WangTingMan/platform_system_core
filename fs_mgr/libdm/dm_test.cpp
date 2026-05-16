@@ -78,6 +78,13 @@ TEST_F(DmTest, HasMinimumTargets) {
     ASSERT_TRUE(dm.GetTargetByName("linear", &info));
 }
 
+TEST_F(DmTest, DebugString) {
+    DmTable table;
+    ASSERT_TRUE(table.Emplace<DmTargetLinear>(0, 1, "dev_a", 0));
+    ASSERT_TRUE(table.Emplace<DmTargetLinear>(1, 1, "dev_b", 0));
+    ASSERT_EQ("linear 0 1 dev_a 0;linear 1 1 dev_b 0", table.DebugString());
+}
+
 TEST_F(DmTest, DmLinear) {
     unique_fd tmp1(CreateTempFile("file_1", 4096));
     ASSERT_GE(tmp1, 0);
@@ -209,6 +216,24 @@ TEST_F(DmTest, DmVerityArgsAvb2) {
             "4be7e823b8c40f7bd5c8ccd5123f0722c5baca21 cc99f81ecb9484220a003b0719ee59dcf9be7e5d 10 "
             "use_fec_from_device /dev/block/platform/soc/1da4000.ufshc/by-name/vendor_a fec_roots "
             "2 fec_blocks 126955 fec_start 126955 restart_on_corruption ignore_zero_blocks";
+    EXPECT_EQ(target.GetParameterString(), expected);
+}
+
+TEST_F(DmTest, DmVerityArgsTryVerifyTasklet) {
+    std::string device = "/dev/block/platform/soc/1da4000.ufshc/by-name/vendor_a";
+    std::string algorithm = "sha1";
+    std::string digest = "4be7e823b8c40f7bd5c8ccd5123f0722c5baca21";
+    std::string salt = "cc99f81ecb9484220a003b0719ee59dcf9be7e5d";
+
+    DmTargetVerity target(0, 10000, 1, device, device, 4096, 4096, 125961, 125961, algorithm,
+                          digest, salt);
+    target.TryVerifyInTasklet();
+
+    std::string expected =
+            "1 /dev/block/platform/soc/1da4000.ufshc/by-name/vendor_a "
+            "/dev/block/platform/soc/1da4000.ufshc/by-name/vendor_a 4096 4096 125961 125961 sha1 "
+            "4be7e823b8c40f7bd5c8ccd5123f0722c5baca21 cc99f81ecb9484220a003b0719ee59dcf9be7e5d 1 "
+            "try_verify_in_tasklet";
     EXPECT_EQ(target.GetParameterString(), expected);
 }
 
@@ -813,4 +838,32 @@ TEST_F(DmTest, ThinProvisioning) {
     thinTable.Emplace<DmTargetThin>(0, ThinSize / kSectorSize, pool.path(), thin_volume_id);
     TempDevice thin("thin", thinTable);
     ASSERT_TRUE(thin.valid());
+}
+
+TEST_F(DmTest, RedactDmCrypt) {
+    static constexpr uint64_t kImageSize = 65536;
+    unique_fd temp_file(CreateTempFile("file_1", kImageSize));
+    ASSERT_GE(temp_file, 0);
+
+    LoopDevice loop(temp_file, 10s);
+    ASSERT_TRUE(loop.valid());
+
+    static constexpr const char* kAlgorithm = "aes-cbc-essiv:sha256";
+    static constexpr const char* kKey = "0e64ef514e6a1315b1f6390cb57c9e6a";
+
+    auto target = std::make_unique<DmTargetCrypt>(0, kImageSize / 512, kAlgorithm, kKey, 0,
+                                                  loop.device(), 0);
+    target->AllowDiscards();
+
+    DmTable table;
+    table.AddTarget(std::move(target));
+
+    auto& dm = DeviceMapper::Instance();
+    std::string crypt_path;
+    ASSERT_TRUE(dm.CreateDevice(test_name_, table, &crypt_path, 10s));
+
+    std::vector<DeviceMapper::TargetInfo> targets;
+    ASSERT_TRUE(dm.GetTableInfo(test_name_, &targets));
+    ASSERT_EQ(targets.size(), 1);
+    EXPECT_EQ(targets[0].data.find(kKey), std::string::npos);
 }

@@ -19,6 +19,7 @@
 #include <healthd/healthd.h>
 #include <healthd/BatteryMonitor.h>
 
+#include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -131,6 +132,7 @@ static void initHealthInfo(HealthInfo* health_info) {
                     (int64_t)HealthInfo::BATTERY_CHARGE_TIME_TO_FULL_NOW_SECONDS_UNSUPPORTED,
             .batteryStatus = BatteryStatus::UNKNOWN,
             .batteryHealth = BatteryHealth::UNKNOWN,
+            .batteryHealthData = std::nullopt,
     };
 }
 
@@ -145,18 +147,6 @@ BatteryMonitor::BatteryMonitor()
 }
 
 BatteryMonitor::~BatteryMonitor() {}
-
-HealthInfo_1_0 BatteryMonitor::getHealthInfo_1_0() const {
-    HealthInfo_1_0 health_info_1_0;
-    translateToHidl(*mHealthInfo, &health_info_1_0);
-    return health_info_1_0;
-}
-
-HealthInfo_2_0 BatteryMonitor::getHealthInfo_2_0() const {
-    HealthInfo_2_0 health_info_2_0;
-    translateToHidl(*mHealthInfo, &health_info_2_0);
-    return health_info_2_0;
-}
 
 HealthInfo_2_1 BatteryMonitor::getHealthInfo_2_1() const {
     HealthInfo_2_1 health_info_2_1;
@@ -341,14 +331,39 @@ static bool getBooleanField(const String8& path) {
     return value;
 }
 
-static int getIntField(const String8& path) {
+template <typename T = int>
+static T getIntField(const String8& path) {
     std::string buf;
-    int value = 0;
+    T value = 0;
 
     if (readFromFile(path, &buf) > 0)
         android::base::ParseInt(buf, &value);
 
     return value;
+}
+
+String8 sanitizeSerialNumber(const std::string& serial) {
+    String8 sanitized;
+    for (const auto& c : serial) {
+        if (isupper(c) || isdigit(c)) {
+            sanitized.appendFormat("%c", c);
+        } else if (islower(c)) {
+            sanitized.appendFormat("%c", toupper(c));
+        } else {
+            // Some devices return non-ASCII characters as part of the serial
+            // number. Handle these gracefully since VTS requires alphanumeric
+            // characters.
+            sanitized.appendFormat("%02X", (unsigned int)c);
+        }
+    }
+    return sanitized;
+}
+
+static String8 readSerialNumber(const String8& path) {
+    std::string unsanitized;
+    if (readFromFile(path, &unsanitized) <= 0) return {};
+
+    return sanitizeSerialNumber(unsanitized);
 }
 
 static bool isScopedPowerSupply(const char* name) {
@@ -358,6 +373,14 @@ static bool isScopedPowerSupply(const char* name) {
     path.appendFormat("%s/%s/scope", POWER_SUPPLY_SYSFS_PATH, name);
     std::string scope;
     return (readFromFile(path, &scope) > 0 && scope == kScopeDevice);
+}
+
+static BatteryHealthData *ensureBatteryHealthData(HealthInfo *info) {
+    if (!info->batteryHealthData.has_value()) {
+        return &info->batteryHealthData.emplace();
+    }
+
+    return &info->batteryHealthData.value();
 }
 
 void BatteryMonitor::updateValues(void) {
@@ -402,16 +425,21 @@ void BatteryMonitor::updateValues(void) {
         mBatteryHealthStatus = getIntField(mHealthdConfig->batteryHealthStatusPath);
 
     if (!mHealthdConfig->batteryStateOfHealthPath.empty())
-        mHealthInfo->batteryHealthData->batteryStateOfHealth =
+        ensureBatteryHealthData(mHealthInfo.get())->batteryStateOfHealth =
                 getIntField(mHealthdConfig->batteryStateOfHealthPath);
 
     if (!mHealthdConfig->batteryManufacturingDatePath.empty())
-        mHealthInfo->batteryHealthData->batteryManufacturingDateSeconds =
-                getIntField(mHealthdConfig->batteryManufacturingDatePath);
+        ensureBatteryHealthData(mHealthInfo.get())->batteryManufacturingDateSeconds =
+                getIntField<int64_t>(mHealthdConfig->batteryManufacturingDatePath);
 
     if (!mHealthdConfig->batteryFirstUsageDatePath.empty())
-        mHealthInfo->batteryHealthData->batteryFirstUsageSeconds =
-                getIntField(mHealthdConfig->batteryFirstUsageDatePath);
+        ensureBatteryHealthData(mHealthInfo.get())->batteryFirstUsageSeconds =
+                getIntField<int64_t>(mHealthdConfig->batteryFirstUsageDatePath);
+
+    if (!mHealthdConfig->batterySerialPath.empty()) {
+        ensureBatteryHealthData(mHealthInfo.get())->batterySerialNumber =
+                readSerialNumber(mHealthdConfig->batterySerialPath);
+    }
 
     mHealthInfo->batteryTemperatureTenthsCelsius =
             mBatteryFixedTemperature ? mBatteryFixedTemperature
@@ -478,12 +506,19 @@ void BatteryMonitor::updateValues(void) {
                               mChargerNames[i].c_str());
             int ChargingCurrent = (access(path.c_str(), R_OK) == 0) ? getIntField(path) : 0;
 
+            int ChargingVoltage;
             path.clear();
             path.appendFormat("%s/%s/voltage_max", POWER_SUPPLY_SYSFS_PATH,
                               mChargerNames[i].c_str());
-
-            int ChargingVoltage =
-                    (access(path.c_str(), R_OK) == 0) ? getIntField(path) : DEFAULT_VBUS_VOLTAGE;
+            if (access(path.c_str(), R_OK) == 0) {
+                ChargingVoltage = getIntField(path);
+            } else {
+                path.clear();
+                path.appendFormat("%s/%s/voltage_max_design", POWER_SUPPLY_SYSFS_PATH,
+                                  mChargerNames[i].c_str());
+                ChargingVoltage = (access(path.c_str(), R_OK) == 0) ? getIntField(path)
+                                                                    : DEFAULT_VBUS_VOLTAGE;
+            }
 
             double power = ((double)ChargingCurrent / MILLION) *
                            ((double)ChargingVoltage / MILLION);
@@ -697,7 +732,9 @@ status_t BatteryMonitor::getProperty(int id, struct BatteryProperty *val) {
 }
 
 status_t BatteryMonitor::getSerialNumber(std::optional<std::string>* out) {
-    *out = std::nullopt;
+    if (!mHealthdConfig->batterySerialPath.empty()) {
+        *out = readSerialNumber(mHealthdConfig->batterySerialPath);
+    }
     return OK;
 }
 
@@ -706,49 +743,54 @@ void BatteryMonitor::dumpState(int fd) {
     char vs[128];
     const HealthInfo& props = *mHealthInfo;
 
+    snprintf(vs, sizeof(vs), "Cached HealthInfo:\n");
+    write(fd, vs, strlen(vs));
     snprintf(vs, sizeof(vs),
-             "ac: %d usb: %d wireless: %d dock: %d current_max: %d voltage_max: %d\n",
+             "  ac: %d usb: %d wireless: %d dock: %d current_max: %d voltage_max: %d\n",
              props.chargerAcOnline, props.chargerUsbOnline, props.chargerWirelessOnline,
              props.chargerDockOnline, props.maxChargingCurrentMicroamps,
              props.maxChargingVoltageMicrovolts);
     write(fd, vs, strlen(vs));
-    snprintf(vs, sizeof(vs), "status: %d health: %d present: %d\n",
+    snprintf(vs, sizeof(vs), "  status: %d health: %d present: %d\n",
              props.batteryStatus, props.batteryHealth, props.batteryPresent);
     write(fd, vs, strlen(vs));
-    snprintf(vs, sizeof(vs), "level: %d voltage: %d temp: %d\n", props.batteryLevel,
+    snprintf(vs, sizeof(vs), "  level: %d voltage: %d temp: %d\n", props.batteryLevel,
              props.batteryVoltageMillivolts, props.batteryTemperatureTenthsCelsius);
     write(fd, vs, strlen(vs));
 
     if (!mHealthdConfig->batteryCurrentNowPath.empty()) {
+        snprintf(vs, sizeof(vs), "  current now: %d\n", props.batteryCurrentMicroamps);
+        write(fd, vs, strlen(vs));
+    }
+
+    if (!mHealthdConfig->batteryCycleCountPath.empty()) {
+        snprintf(vs, sizeof(vs), "  cycle count: %d\n", props.batteryCycleCount);
+        write(fd, vs, strlen(vs));
+    }
+
+    if (!mHealthdConfig->batteryFullChargePath.empty()) {
+        snprintf(vs, sizeof(vs), "  Full charge: %d\n", props.batteryFullChargeUah);
+        write(fd, vs, strlen(vs));
+    }
+
+    snprintf(vs, sizeof(vs), "Real-time Values:\n");
+    write(fd, vs, strlen(vs));
+
+    if (!mHealthdConfig->batteryCurrentNowPath.empty()) {
         v = getIntField(mHealthdConfig->batteryCurrentNowPath);
-        snprintf(vs, sizeof(vs), "current now: %d\n", v);
+        snprintf(vs, sizeof(vs), "  current now: %d\n", v);
         write(fd, vs, strlen(vs));
     }
 
     if (!mHealthdConfig->batteryCurrentAvgPath.empty()) {
         v = getIntField(mHealthdConfig->batteryCurrentAvgPath);
-        snprintf(vs, sizeof(vs), "current avg: %d\n", v);
+        snprintf(vs, sizeof(vs), "  current avg: %d\n", v);
         write(fd, vs, strlen(vs));
     }
 
     if (!mHealthdConfig->batteryChargeCounterPath.empty()) {
         v = getIntField(mHealthdConfig->batteryChargeCounterPath);
-        snprintf(vs, sizeof(vs), "charge counter: %d\n", v);
-        write(fd, vs, strlen(vs));
-    }
-
-    if (!mHealthdConfig->batteryCurrentNowPath.empty()) {
-        snprintf(vs, sizeof(vs), "current now: %d\n", props.batteryCurrentMicroamps);
-        write(fd, vs, strlen(vs));
-    }
-
-    if (!mHealthdConfig->batteryCycleCountPath.empty()) {
-        snprintf(vs, sizeof(vs), "cycle count: %d\n", props.batteryCycleCount);
-        write(fd, vs, strlen(vs));
-    }
-
-    if (!mHealthdConfig->batteryFullChargePath.empty()) {
-        snprintf(vs, sizeof(vs), "Full charge: %d\n", props.batteryFullChargeUah);
+        snprintf(vs, sizeof(vs), "  charge counter: %d\n", v);
         write(fd, vs, strlen(vs));
     }
 }
@@ -961,6 +1003,12 @@ void BatteryMonitor::init(struct healthd_config *hc) {
                     if (access(path.c_str(), R_OK) == 0) mHealthdConfig->chargingPolicyPath = path;
                 }
 
+                if (mHealthdConfig->batterySerialPath.empty()) {
+                    path.clear();
+                    path.appendFormat("%s/%s/serial_number", POWER_SUPPLY_SYSFS_PATH, name);
+                    if (access(path.c_str(), R_OK) == 0) mHealthdConfig->batterySerialPath = path;
+                }
+
                 break;
 
             case ANDROID_POWER_SUPPLY_TYPE_UNKNOWN:
@@ -1023,6 +1071,8 @@ void BatteryMonitor::init(struct healthd_config *hc) {
             KLOG_WARNING(LOG_TAG, "chargingStatePath not found\n");
         if (mHealthdConfig->chargingPolicyPath.empty())
             KLOG_WARNING(LOG_TAG, "chargingPolicyPath not found\n");
+        if (mHealthdConfig->batterySerialPath.empty())
+            KLOG_WARNING(LOG_TAG, "batterySerialPath not found\n");
     }
 
     if (property_get("ro.boot.fake_battery", pval, NULL) > 0

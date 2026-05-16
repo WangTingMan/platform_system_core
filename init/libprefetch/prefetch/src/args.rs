@@ -25,8 +25,6 @@ use std::process::exit;
 
 pub use args_internal::OutputFormat;
 pub use args_internal::ReplayArgs;
-#[cfg(target_os = "android")]
-pub use args_internal::StartArgs;
 pub use args_internal::TracerType;
 pub use args_internal::{DumpArgs, MainArgs, RecordArgs, SubCommands};
 use serde::Deserialize;
@@ -52,7 +50,8 @@ fn verify_and_fix(args: &mut MainArgs) -> Result<(), Error> {
     match &mut args.nested {
         SubCommands::Record(arg) => {
             if arg.debug && arg.int_path.is_none() {
-                arg.int_path = Some(PathBuf::from(format!("{}.int", arg.path.to_str().unwrap())));
+                let path = arg.get_pack_path();
+                arg.int_path = Some(PathBuf::from(format!("{}.int", path.to_str().unwrap())));
             }
 
             if let Some(p) = &arg.int_path {
@@ -68,8 +67,6 @@ fn verify_and_fix(args: &mut MainArgs) -> Result<(), Error> {
         SubCommands::Dump(arg) => {
             ensure_path_exists(&arg.path)?;
         }
-        #[cfg(target_os = "android")]
-        SubCommands::Start(_arg) => return Ok(()),
     }
     Ok(())
 }
@@ -105,7 +102,7 @@ pub(crate) fn ensure_path_exists(p: &Path) -> Result<(), Error> {
 pub fn args_from_env() -> MainArgs {
     let mut args = args_internal::args_from_env();
     if let Err(e) = verify_and_fix(&mut args) {
-        error!("failed to verify args: {}", e);
+        error!("failed to verify args: {e}");
         exit(1);
     }
     args

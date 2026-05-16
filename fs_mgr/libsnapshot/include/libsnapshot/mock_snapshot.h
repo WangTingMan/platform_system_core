@@ -34,7 +34,7 @@ class MockSnapshotManager : public ISnapshotManager {
                 (const std::function<bool()>& callback, const std::function<bool()>& before_cancel),
                 (override));
     MOCK_METHOD(UpdateState, GetUpdateState, (double* progress), (override));
-    MOCK_METHOD(bool, UpdateUsesCompression, (), (override));
+    MOCK_METHOD(bool, UpdateUsesSnapuserd, (), (override));
     MOCK_METHOD(bool, UpdateUsesUserSnapshots, (), (override));
     MOCK_METHOD(Return, CreateUpdateSnapshots,
                 (const chromeos_update_engine::DeltaArchiveManifest& manifest), (override));
@@ -63,6 +63,7 @@ class MockSnapshotManager : public ISnapshotManager {
     MOCK_METHOD(ISnapshotMergeStats*, GetSnapshotMergeStatsInstance, (), (override));
     MOCK_METHOD(std::string, ReadSourceBuildFingerprint, (), (override));
     MOCK_METHOD(void, SetMergeStatsFeatures, (ISnapshotMergeStats*), (override));
+    MOCK_METHOD(bool, IsCancelUpdateSafe, (), (override));
 };
 
 }  // namespace android::snapshot

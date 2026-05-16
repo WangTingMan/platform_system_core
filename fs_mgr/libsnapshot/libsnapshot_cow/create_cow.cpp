@@ -8,6 +8,7 @@
 
 #include <condition_variable>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -17,26 +18,36 @@
 #include <unordered_map>
 #include <vector>
 
-#include <android-base/file.h>
-#include <android-base/logging.h>
-#include <android-base/stringprintf.h>
-#include <android-base/unique_fd.h>
-#include <ext4_utils/ext4_utils.h>
-#include <storage_literals/storage_literals.h>
-
 #include <android-base/chrono_utils.h>
+#include <android-base/file.h>
+#include <android-base/hex.h>
+#include <android-base/logging.h>
 #include <android-base/scopeguard.h>
+#include <android-base/stringprintf.h>
 #include <android-base/strings.h>
-
+#include <android-base/unique_fd.h>
+#include <android/snapshot/snapshot.pb.h>
+#include <ext4_utils/ext4_utils.h>
+#include <fs_avb/fs_avb_util.h>
 #include <gflags/gflags.h>
 #include <libsnapshot/cow_writer.h>
-
 #include <openssl/sha.h>
+#include <storage_literals/storage_literals.h>
 
 DEFINE_string(source, "", "Source partition image");
 DEFINE_string(target, "", "Target partition image");
+DEFINE_uint64(partition_size, 0,
+              "Size of the target partition in bytes. Used when source and target images are not "
+              "available.");
+DEFINE_string(
+        output_dir, "",
+        "Output directory to write the patch file to. Defaults to current working directory if "
+        "not set.");
+DEFINE_string(output_file, "", "Output file name for the patch. Overrides --output_dir.");
 DEFINE_string(compression, "lz4",
               "Compression algorithm. Default is set to lz4. Available options: lz4, zstd, gz");
+DEFINE_bool(merkel_tree, false, "If true, source image hash is obtained from verity merkel tree");
+DEFINE_bool(inplace_copy_ops, false, "If true, inplace copy ops are added to the snapshot patch");
 
 namespace android {
 namespace snapshot {
@@ -51,7 +62,9 @@ using android::snapshot::ICowWriter;
 class CreateSnapshot {
   public:
     CreateSnapshot(const std::string& src_file, const std::string& target_file,
-                   const std::string& patch_file, const std::string& compression);
+                   uint64_t partition_size, const std::string& patch_file,
+                   const std::string& compression, const bool& merkel_tree,
+                   const bool& inplace_copy_ops);
     bool CreateSnapshotPatch();
 
   private:
@@ -59,6 +72,8 @@ class CreateSnapshot {
     std::string src_file_;
     /* target.img */
     std::string target_file_;
+    /* size of target partition when source/target images are not available */
+    uint64_t partition_size_ = 0;
     /* snapshot-patch generated */
     std::string patch_file_;
 
@@ -68,6 +83,7 @@ class CreateSnapshot {
      */
     std::string parsing_file_;
     bool create_snapshot_patch_ = false;
+    bool incremental_ = true;
 
     const int kNumThreads = 6;
     const size_t kBlockSizeToRead = 1_MiB;
@@ -96,6 +112,8 @@ class CreateSnapshot {
     bool ReadBlocks(off_t offset, const int skip_blocks, const uint64_t dev_sz);
     std::string ToHexString(const uint8_t* buf, size_t len);
 
+    bool CreateNoOpSnapshot();
+    bool CreateSnapshotFullOta();
     bool CreateSnapshotFile();
     bool FindSourceBlockHash();
     bool PrepareParse(std::string& parsing_file, const bool createSnapshot);
@@ -108,6 +126,15 @@ class CreateSnapshot {
     bool WriteOrderedSnapshots();
     bool WriteNonOrderedSnapshots();
     bool VerifyMergeOrder();
+
+    bool CalculateDigest(const void* buffer, size_t size, const void* salt, uint32_t salt_length,
+                         uint8_t* digest);
+    bool ParseSourceMerkelTree();
+
+    bool use_merkel_tree_ = false;
+    bool allow_inplace_copy_ops_ = false;
+    std::vector<uint8_t> target_salt_;
+    std::vector<uint8_t> source_salt_;
 };
 
 void CreateSnapshotLogger(android::base::LogId, android::base::LogSeverity severity, const char*,
@@ -120,10 +147,21 @@ void CreateSnapshotLogger(android::base::LogId, android::base::LogSeverity sever
 }
 
 CreateSnapshot::CreateSnapshot(const std::string& src_file, const std::string& target_file,
-                               const std::string& patch_file, const std::string& compression)
-    : src_file_(src_file), target_file_(target_file), patch_file_(patch_file) {
+                               uint64_t partition_size, const std::string& patch_file,
+                               const std::string& compression, const bool& merkel_tree,
+                               const bool& inplace_copy_ops)
+    : src_file_(src_file),
+      target_file_(target_file),
+      partition_size_(partition_size),
+      patch_file_(patch_file),
+      use_merkel_tree_(merkel_tree),
+      allow_inplace_copy_ops_(inplace_copy_ops) {
     if (!compression.empty()) {
         compression_ = compression;
+    }
+
+    if (src_file_.empty()) {
+        incremental_ = false;
     }
 }
 
@@ -156,7 +194,99 @@ bool CreateSnapshot::FindSourceBlockHash() {
     if (!PrepareParse(src_file_, false)) {
         return false;
     }
-    return ParsePartition();
+
+    if (use_merkel_tree_) {
+        return ParseSourceMerkelTree();
+    } else {
+        return ParsePartition();
+    }
+}
+
+bool CreateSnapshot::CalculateDigest(const void* buffer, size_t size, const void* salt,
+                                     uint32_t salt_length, uint8_t* digest) {
+    SHA256_CTX ctx;
+    if (SHA256_Init(&ctx) != 1) {
+        return false;
+    }
+    if (SHA256_Update(&ctx, salt, salt_length) != 1) {
+        return false;
+    }
+    if (SHA256_Update(&ctx, buffer, size) != 1) {
+        return false;
+    }
+    if (SHA256_Final(digest, &ctx) != 1) {
+        return false;
+    }
+    return true;
+}
+
+bool CreateSnapshot::ParseSourceMerkelTree() {
+    std::string fname = android::base::Basename(target_file_.c_str());
+    std::string partitionName = fname.substr(0, fname.find(".img"));
+
+    auto vbmeta = android::fs_mgr::LoadAndVerifyVbmetaByPath(
+            target_file_, partitionName, "", true, false, false, nullptr, nullptr, nullptr);
+    if (vbmeta == nullptr) {
+        LOG(ERROR) << "LoadAndVerifyVbmetaByPath failed for partition: " << partitionName;
+        return false;
+    }
+    auto descriptor = android::fs_mgr::GetHashtreeDescriptor(partitionName, std::move(*vbmeta));
+    if (descriptor == nullptr) {
+        LOG(ERROR) << "GetHashtreeDescriptor failed for partition: " << partitionName;
+        return false;
+    }
+
+    std::fstream input(src_file_, std::ios::in | std::ios::binary);
+    VerityHash hash;
+    if (!hash.ParseFromIstream(&input)) {
+        LOG(ERROR) << "Failed to parse message.";
+        return false;
+    }
+
+    std::string source_salt = hash.salt();
+    source_salt.erase(std::remove(source_salt.begin(), source_salt.end(), '\0'), source_salt.end());
+    if (!android::base::HexToBytes(source_salt, &source_salt_)) {
+        LOG(ERROR) << "HexToBytes conversion failed for source salt: " << source_salt;
+        return false;
+    }
+
+    std::string target_salt = descriptor->salt;
+    if (!android::base::HexToBytes(target_salt, &target_salt_)) {
+        LOG(ERROR) << "HexToBytes conversion failed for target salt: " << target_salt;
+        return false;
+    }
+
+    std::vector<uint8_t> digest(32, 0);
+    for (int i = 0; i < hash.block_hash_size(); i++) {
+        CalculateDigest(hash.block_hash(i).data(), hash.block_hash(i).size(), target_salt_.data(),
+                        target_salt_.size(), digest.data());
+        source_block_hash_[ToHexString(digest.data(), 32)] = i;
+    }
+
+    return true;
+}
+
+/*
+ * Create no-op snapshot patch, that is, a patch that leaves the target
+ * partition intact.
+ */
+bool CreateSnapshot::CreateNoOpSnapshot() {
+    if (!IsBlockAligned(partition_size_)) {
+        LOG(ERROR) << "partition_size_: " << partition_size_ << " is not block aligned";
+        return false;
+    }
+
+    cow_fd_.reset(open(patch_file_.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0666));
+    if (cow_fd_ < 0) {
+        PLOG(ERROR) << "Failed to open the snapshot-patch file: " << patch_file_;
+        return false;
+    }
+
+    if (!WriteV3Snapshots()) {
+        LOG(ERROR) << "Snapshot Write failed";
+        return false;
+    }
+    return true;
 }
 
 /*
@@ -171,10 +301,24 @@ bool CreateSnapshot::CreateSnapshotFile() {
     return ParsePartition();
 }
 
+bool CreateSnapshot::CreateSnapshotFullOta() {
+    if (!PrepareParse(target_file_, true)) {
+        return false;
+    }
+    return ParsePartition();
+}
+
 /*
  * Creates snapshot patch file by comparing source.img and target.img
  */
 bool CreateSnapshot::CreateSnapshotPatch() {
+    if (partition_size_ > 0) {
+        return CreateNoOpSnapshot();
+    }
+    if (!incremental_) {
+        return CreateSnapshotFullOta();
+    }
+
     if (!FindSourceBlockHash()) {
         return false;
     }
@@ -201,22 +345,24 @@ std::string CreateSnapshot::ToHexString(const uint8_t* buf, size_t len) {
 
 void CreateSnapshot::PrepareMergeBlock(const void* buffer, uint64_t block,
                                        std::string& block_hash) {
-    if (std::memcmp(zblock_.get(), buffer, BLOCK_SZ) == 0) {
-        std::lock_guard<std::mutex> lock(write_lock_);
-        zero_blocks_.push_back(block);
-        return;
-    }
-
-    auto iter = source_block_hash_.find(block_hash);
-    if (iter != source_block_hash_.end()) {
-        std::lock_guard<std::mutex> lock(write_lock_);
-        // In-place copy is skipped
-        if (block != iter->second) {
-            copy_blocks_[block] = iter->second;
-        } else {
-            in_place_ops_ += 1;
+    if (incremental_) {
+        if (std::memcmp(zblock_.get(), buffer, BLOCK_SZ) == 0) {
+            std::lock_guard<std::mutex> lock(write_lock_);
+            zero_blocks_.push_back(block);
+            return;
         }
-        return;
+
+        auto iter = source_block_hash_.find(block_hash);
+        if (iter != source_block_hash_.end()) {
+            std::lock_guard<std::mutex> lock(write_lock_);
+            // In-place copy is skipped conditionally
+            if (allow_inplace_copy_ops_ || (block != iter->second)) {
+                copy_blocks_[block] = iter->second;
+            } else {
+                in_place_ops_ += 1;
+            }
+            return;
+        }
     }
     std::lock_guard<std::mutex> lock(write_lock_);
     replace_blocks_.push_back(block);
@@ -239,7 +385,10 @@ size_t CreateSnapshot::PrepareWrite(size_t* pending_ops, size_t start_index) {
 }
 
 bool CreateSnapshot::CreateSnapshotWriter() {
-    uint64_t dev_sz = lseek(target_fd_.get(), 0, SEEK_END);
+    uint64_t dev_sz = partition_size_;
+    if (partition_size_ == 0) {
+        dev_sz = lseek(target_fd_.get(), 0, SEEK_END);
+    }
     CowOptions options;
     options.compression = compression_;
     options.num_compress_threads = 2;
@@ -288,29 +437,83 @@ bool CreateSnapshot::WriteNonOrderedSnapshots() {
     }
     return true;
 }
-
 bool CreateSnapshot::WriteOrderedSnapshots() {
-    std::unordered_map<uint64_t, uint64_t> overwritten_blocks;
-    std::vector<std::pair<uint64_t, uint64_t>> merge_sequence;
-    for (auto it = copy_blocks_.begin(); it != copy_blocks_.end(); it++) {
-        if (overwritten_blocks.count(it->second)) {
-            replace_blocks_.push_back(it->first);
-            continue;
+    // Sort copy_blocks_ by target block index so consecutive
+    // target blocks can be together
+    std::vector<std::pair<uint64_t, uint64_t>> sorted_copy_blocks_(copy_blocks_.begin(),
+                                                                   copy_blocks_.end());
+    std::sort(sorted_copy_blocks_.begin(), sorted_copy_blocks_.end());
+    std::unordered_map<uint64_t, std::vector<uint64_t>> dependency_graph;
+    std::unordered_map<uint64_t, int> in_degree;
+
+    // Initialize in-degree and build the dependency graph
+    for (const auto& [target, source] : sorted_copy_blocks_) {
+        in_degree[target] = 0;
+        if (copy_blocks_.count(source)) {
+            // this source block itself gets modified
+            // Only add a dependency if it's not a self-loop causing it.
+            // An X->X operation should not make X depend on itself in a way that forms a cycle.
+            if (source != target) {
+                dependency_graph[source].push_back(target);
+                in_degree[target]++;
+            }
         }
-        overwritten_blocks[it->first] = it->second;
-        merge_sequence.emplace_back(std::make_pair(it->first, it->second));
+    }
+
+    std::vector<uint64_t> ordered_copy_ops_;
+    std::deque<uint64_t> queue;
+
+    // Add nodes with in-degree 0 (no dependency) to the queue
+    for (const auto& [target, degree] : in_degree) {
+        if (degree == 0) {
+            queue.push_back(target);
+        }
+    }
+
+    while (!queue.empty()) {
+        uint64_t current_target = queue.front();
+        queue.pop_front();
+        ordered_copy_ops_.push_back(current_target);
+
+        if (dependency_graph.count(current_target)) {
+            for (uint64_t neighbor : dependency_graph[current_target]) {
+                in_degree[neighbor]--;
+                if (in_degree[neighbor] == 0) {
+                    queue.push_back(neighbor);
+                }
+            }
+        }
+    }
+
+    // Detect cycles and change those blocks to replace blocks
+    if (ordered_copy_ops_.size() != copy_blocks_.size()) {
+        LOG(INFO) << "Cycle detected in copy operations! Converting some to replace.";
+        std::unordered_set<uint64_t> safe_targets_(ordered_copy_ops_.begin(),
+                                                   ordered_copy_ops_.end());
+        for (auto it = copy_blocks_.begin(); it != copy_blocks_.end();) {
+            if (safe_targets_.find(it->first) == safe_targets_.end()) {
+                replace_blocks_.push_back(it->first);
+                it = copy_blocks_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    std::reverse(ordered_copy_ops_.begin(), ordered_copy_ops_.end());
+    // Add the copy blocks
+    copy_ops_ = 0;
+    for (uint64_t target : ordered_copy_ops_) {
+        LOG(DEBUG) << "copy target: " << target << " source: " << copy_blocks_[target];
+        if (!writer_->AddCopy(target, copy_blocks_[target], 1)) {
+            return false;
+        }
+        copy_ops_++;
     }
     // Sort the blocks so that if the blocks are contiguous, it would help
     // compress multiple blocks in one shot based on the compression factor.
     std::sort(replace_blocks_.begin(), replace_blocks_.end());
-
-    copy_ops_ = merge_sequence.size();
-    for (auto it = merge_sequence.begin(); it != merge_sequence.end(); it++) {
-        if (!writer_->AddCopy(it->first, it->second, 1)) {
-            return false;
-        }
-    }
-
+    LOG(DEBUG) << "Total copy ops: " << copy_ops_;
     return true;
 }
 
@@ -386,10 +589,22 @@ bool CreateSnapshot::ReadBlocks(off_t offset, const int skip_blocks, const uint6
         while (num_blocks) {
             const void* bufptr = (char*)buffer.get() + buffer_offset;
             uint64_t blkindex = foffset / BLOCK_SZ;
+            std::string hash;
 
-            uint8_t checksum[32];
-            SHA256(bufptr, BLOCK_SZ, checksum);
-            std::string hash = ToHexString(checksum, sizeof(checksum));
+            if (create_snapshot_patch_ && use_merkel_tree_) {
+                std::vector<uint8_t> digest(32, 0);
+                CalculateDigest(bufptr, BLOCK_SZ, source_salt_.data(), source_salt_.size(),
+                                digest.data());
+                std::vector<uint8_t> final_digest(32, 0);
+                CalculateDigest(digest.data(), digest.size(), target_salt_.data(),
+                                target_salt_.size(), final_digest.data());
+
+                hash = ToHexString(final_digest.data(), final_digest.size());
+            } else {
+                uint8_t checksum[32];
+                SHA256(bufptr, BLOCK_SZ, checksum);
+                hash = ToHexString(checksum, sizeof(checksum));
+            }
 
             if (create_snapshot_patch_) {
                 PrepareMergeBlock(bufptr, blkindex, hash);
@@ -467,19 +682,30 @@ bool CreateSnapshot::ParsePartition() {
 
 constexpr char kUsage[] = R"(
 NAME
-    create_snapshot - Create snapshot patches by comparing two partition images
+    create_snapshot - Create snapshot patches
 
 SYNOPSIS
-    create_snapshot --source=<source.img> --target=<target.img> --compression="<compression-algorithm"
+    $create_snapshot --source=<source.img> --target=<target.img> --compression="<compression-algorithm"
 
     source.img -> Source partition image
     target.img -> Target partition image
-    compressoin -> compression algorithm. Default set to lz4. Supported types are gz, lz4, zstd.
+    partition_size -> Size of the target partition in bytes. Used when source and target images are not available.
+                      Cannot be used with --source and --target. Creates a "no-op" patch that leaves the target
+                      partition intact.
+    compression -> compression algorithm. Default set to lz4. Supported types are gz, lz4, zstd.
+    merkel_tree -> If true, source image hash is obtained from verity merkel tree.
+    inplace_copy_ops -> If true, inplace copy ops are added to the snapshot patch.
+    output_dir -> Output directory to write the patch file to. Defaults to current working directory if not set.
+    output_file -> Output file name for the patch. Overrides --output_dir.
 
 EXAMPLES
 
    $ create_snapshot $SOURCE_BUILD/system.img $TARGET_BUILD/system.img
    $ create_snapshot $SOURCE_BUILD/product.img $TARGET_BUILD/product.img --compression="zstd"
+   $ create_snapshot $SOURCE_BUILD/product.img $TARGET_BUILD/product.img --merkel_tree --output_dir=/tmp/create_snapshot_output
+   $ create_snapshot $SOURCE_BUILD/product.img $TARGET_BUILD/product.img --output_file=/tmp/my.patch
+   $ create_snapshot $SOURCE_BUILD/product.img $TARGET_BUILD/product.img --inplace_copy_ops
+   $ create_snapshot --partition_size=1048576 --output_file=/tmp/my.patch
 
 )";
 
@@ -488,16 +714,39 @@ int main(int argc, char* argv[]) {
     ::gflags::SetUsageMessage(kUsage);
     ::gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    if (FLAGS_source.empty() || FLAGS_target.empty()) {
+    if (FLAGS_partition_size > 0) {
+        // If --partition_size is specified, --source and --target must NOT be set.
+        if (!FLAGS_source.empty() || !FLAGS_target.empty()) {
+            LOG(INFO) << kUsage;
+            return 1;
+        }
+    } else {
+        // Otherwise, --target is required.
+        if (FLAGS_target.empty()) {
+            LOG(INFO) << kUsage;
+            return 0;
+        }
+    }
+
+    if (FLAGS_target.empty() && !FLAGS_source.empty()) {
         LOG(INFO) << kUsage;
         return 0;
     }
 
-    std::string fname = android::base::Basename(FLAGS_target.c_str());
-    auto parts = android::base::Split(fname, ".");
-    std::string snapshotfile = parts[0] + ".patch";
-    android::snapshot::CreateSnapshot snapshot(FLAGS_source, FLAGS_target, snapshotfile,
-                                               FLAGS_compression);
+    std::string snapshotfile;
+    if (!FLAGS_output_file.empty()) {
+        snapshotfile = FLAGS_output_file;
+    } else {
+        std::string fname = android::base::Basename(FLAGS_target.c_str());
+        auto parts = android::base::Split(fname, ".");
+        snapshotfile = parts[0] + ".patch";
+        if (!FLAGS_output_dir.empty()) {
+            snapshotfile = FLAGS_output_dir + "/" + snapshotfile;
+        }
+    }
+    android::snapshot::CreateSnapshot snapshot(FLAGS_source, FLAGS_target, FLAGS_partition_size,
+                                               snapshotfile, FLAGS_compression, FLAGS_merkel_tree,
+                                               FLAGS_inplace_copy_ops);
 
     if (!snapshot.CreateSnapshotPatch()) {
         LOG(ERROR) << "Snapshot creation failed";

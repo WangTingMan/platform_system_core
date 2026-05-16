@@ -54,11 +54,6 @@ using android::base::unique_fd;
 
 static InterceptManager* intercept_manager;
 
-enum CrashStatus {
-  kCrashStatusRunning,
-  kCrashStatusQueued,
-};
-
 struct CrashArtifact {
   unique_fd fd;
 
@@ -144,7 +139,6 @@ class CrashQueue {
   CrashArtifact create_temporary_file() const {
     CrashArtifact result;
 
-    std::optional<std::string> path;
     result.fd.reset(openat(dir_fd_, ".", O_WRONLY | O_APPEND | O_TMPFILE | O_CLOEXEC, 0660));
     if (result.fd == -1) {
       PLOG(FATAL) << "failed to create temporary tombstone in " << dir_path_;
@@ -273,9 +267,6 @@ class CrashQueue {
 
   DISALLOW_COPY_AND_ASSIGN(CrashQueue);
 };
-
-// Whether java trace dumps are produced via tombstoned.
-static constexpr bool kJavaTraceDumpsEnabled = true;
 
 // Forward declare the callbacks so they can be placed in a sensible order.
 static void crash_accept_cb(evconnlistener* listener, evutil_socket_t sockfd, sockaddr*, int,
@@ -525,7 +516,8 @@ int main(int, char* []) {
     LOG(FATAL) << "failed to create evconnlistener for tombstones.";
   }
 
-  if (kJavaTraceDumpsEnabled) {
+  // Java trace isn't supported for microdroid.
+  if (!is_microdroid()) {
     const int java_trace_socket = android_get_control_socket(kTombstonedJavaTraceSocketName);
     if (java_trace_socket == -1) {
       PLOG(FATAL) << "failed to get socket from init";
