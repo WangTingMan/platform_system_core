@@ -134,6 +134,19 @@ inline unsigned __int64 __lzcnt_switcher(
     return __lzcnt(static_cast<unsigned int>(value));
 }
 
+template <typename T1, typename T2, typename OUT_T>
+inline bool __safe_smul_overflow( T1 a, T2 b, OUT_T* out ) {
+    if ((a > 0 && b > 0 && a > INT_MAX / b) ||
+        (a < 0 && b < 0 && a < INT_MIN / b) ||
+        (a > 0 && b < 0 && b < INT_MIN / a) ||
+        (a < 0 && b > 0 && a < INT_MIN / b))
+    {
+        return true;
+    }
+    *out = a * b;
+    return false;
+}
+
 #define __builtin_add_overflow(a, b, sum) CheckAddOverflow( (a), (b), (*sum) )
 #define __builtin_sub_overflow(a, b, sum) CheckSubOverflow( (a), (b), (*sum) )
 #define __builtin_mul_overflow( a, b, sum ) __mul_overflowed( (a), (b), (*sum) )
@@ -146,5 +159,6 @@ inline unsigned __int64 __lzcnt_switcher(
 #define __builtin_ctzll(v) std::countr_zero( v )
 #define __builtin_align_up(v, a)  (((v) + (a) - 1) & ~((a) - 1))
 #define __builtin_align_down(v, a)  ((v) & ~((a) - 1))
+#define __builtin_smul_overflow(a, b, out)  __safe_smul_overflow((a), (b), (out))
 #endif
 
