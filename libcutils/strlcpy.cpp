@@ -159,14 +159,26 @@ int __dump_to_file_descriptor
 {
 #define BUFFER_SIZE 2048
 
-    char buf[BUFFER_SIZE] = { 0x00 };
-    if( fmt )
-    {
-        va_list vaList;
-        va_start( vaList, fmt );
-        vsnprintf( buf, BUFFER_SIZE - 1, fmt, vaList );
-        va_end( vaList );
+    if( !fmt || fd < 0 ) {
+        return -1;
     }
+
+    char buf[BUFFER_SIZE] = { 0x00 };
+    int size = 0;
+    va_list vaList;
+    va_start( vaList, fmt );
+    size = vsnprintf( buf, BUFFER_SIZE - 1, fmt, vaList );
+    va_end( vaList );
+
+    if( size < 0 ) {
+        return -1;
+    }
+
+    if( size >= BUFFER_SIZE ) {
+        size = BUFFER_SIZE - 1;
+    }
+
+    _write( fd, buf, size );
     return 0;
 }
 
