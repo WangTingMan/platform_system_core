@@ -30,6 +30,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -295,7 +296,8 @@ int pthread_manager::get_next_id()
 void thread_running_task
     (
     std::function<void()> a_detail_task,
-    int a_init_id
+    int a_init_id,
+    std::shared_ptr<std::promise<uint64_t>> a_detail_id
     )
 {
     auto preset_name = pthread_manager::get_instance()
@@ -307,6 +309,11 @@ void thread_running_task
 
     uint64_t underly_id = GetCurrentThreadId();
     pthread_manager::get_instance().set_underlying_id(a_init_id, underly_id);
+    if( a_detail_id )
+    {
+        a_detail_id->set_value(underly_id);
+        a_detail_id.reset();
+    }
     a_detail_task();
 }
 
@@ -321,10 +328,21 @@ COLD int dav1d_pthread_create( pthread_t* const thread,
     std::function<void()> fun = std::bind(func, arg);
     pthread_cb cb;
     cb.id = pthread_manager::get_instance().get_next_id();
+    std::shared_ptr<std::promise<uint64_t>> promis_;
+    promis_ = std::make_shared<std::promise<uint64_t>>();
+    std::future<uint64_t> future_ = promis_->get_future();
     std::shared_ptr<std::thread> thread_ = std::make_shared<std::thread>
-        (thread_running_task, fun, cb.id);
+        (thread_running_task, fun, cb.id, promis_);
     cb.thread = thread_;
     *thread = cb.id;
+    auto status = future_.wait_for(std::chrono::seconds(2));
+    if( status == std::future_status::ready )
+    {
+        uint64_t underly_id = future_.get();
+        *thread = underly_id;
+        cb.id = underly_id;
+        cb.underlying_id = underly_id;
+    }
     pthread_manager::get_instance().add_thread(cb);
     return 0;
 }

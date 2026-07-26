@@ -106,7 +106,7 @@ CUTILS_EXPORT int nanosleep( const struct timespec* req, struct timespec* rem );
 #define PTHREAD_SCOPE_SYSTEM 0
 #define PTHREAD_SCOPE_PROCESS 1
 
-typedef int pthread_t;
+typedef uint64_t pthread_t;
 
 typedef struct
 {

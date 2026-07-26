@@ -33,6 +33,8 @@
 #include <android-base/properties.h>
 #endif
 
+#include <base/base64.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -116,6 +118,13 @@ int property_set(const char* key, const char* value) {
     return g_set_callback(key, value);
 }
 
+int property_binary_set( const char* key, const char* value, uint32_t size )
+{
+    std::string buffe;
+    base::Base64Encode( value, size, &buffe );
+    return property_set(key,buffe.c_str());
+}
+
 int property_get(const char* key, char* value, const char* default_value) {
     int len = g_get_callback(key, value);
     if (len < 1 ) {
@@ -126,6 +135,21 @@ int property_get(const char* key, char* value, const char* default_value) {
         return strlen(value);
     }
     return len;
+}
+
+int property_get_binary( const char* key, char* value, uint16_t size )
+{
+    char buffer[PROPERTY_VALUE_MAX];
+    int status = property_get(key, buffer, "");
+    std::vector<char> original;
+    bool result = base::Base64Decode( buffer, original );
+    int cpy_size = size > original.size() ? original.size() : size;
+    if( result )
+    {
+        memcpy( value, original.data(), cpy_size );
+    }
+
+    return cpy_size;
 }
 
 #if __has_include(<sys/system_properties.h>)

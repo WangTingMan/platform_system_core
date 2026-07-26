@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <cutils\cutils_export.h>
+#include <cutils/cutils_export.h>
 
 #if __has_include(<sys/cdefs.h>)
 #include <sys/cdefs.h>
@@ -62,6 +62,8 @@ CUTILS_EXPORT void set_property_callback( property_set_callback_type set_callbac
 ** value is used (if nonnull).
 */
 CUTILS_EXPORT int property_get(const char* key, char* value, const char* default_value);
+
+CUTILS_EXPORT int property_get_binary( const char* key, char* value, uint16_t size );
 
 /* property_get_bool: returns the value of key coerced into a
 ** boolean. If the property is not set, then the default value is returned.
@@ -124,6 +126,8 @@ CUTILS_EXPORT int32_t property_get_int32(const char *key, int32_t default_value)
 /* property_set: returns 0 on success, < 0 on failure
 */
 CUTILS_EXPORT int property_set(const char *key, const char *value);
+
+CUTILS_EXPORT int property_binary_set( const char* key, const char* value, uint32_t size );
 
 CUTILS_EXPORT int property_list(void (*propfn)(const char *key, const char *value, void *cookie), void *cookie);
 
