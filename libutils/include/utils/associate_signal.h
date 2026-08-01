@@ -10,8 +10,10 @@
 #define DEBUG_SIGNAL
 
 #ifdef DEBUG_SIGNAL
+#if __has_include(<log/log.h>)
 #include <log/log.h>
 #define SIGNAL_LOG ALOGI
+#endif
 #endif
 
 #ifndef SIGNAL_LOG
@@ -28,7 +30,16 @@ struct user_data_type
  * then this signal will go to triggered.
  * m_downstream_signals: once this signal triggered, then this signal
  * needs trigger all these ones in the m_downstream_signals.
- * 
+ *
+ * Public trigger semantics:
+ *   trigger() is edge-triggered. If this signal is already triggered,
+ *   repeated user calls are ignored until reset() is called.
+ *
+ * Internal propagation semantics:
+ *   Cascaded trigger_dfs() calls are not suppressed by the triggered
+ *   state. An already-triggered signal may notify its waiters again and
+ *   continue propagating the event to its downstream signals.
+ *
  * @brief This component operates on an Edge-Triggered model.
  * * @note If the signal is already in a triggered state, subsequent calls to trigger()
  * will be intercepted and ignored. To force a re-trigger, you MUST explicitly
@@ -96,7 +107,7 @@ public:
 
     void reset()
     {
-        std::lock_guard<std::mutex> locker( m_mutex );
+        std::lock_guard locker( m_mutex );
         m_triggered = false;
         SIGNAL_LOG("reset %d, name %s", m_id, m_name.c_str());
     }
@@ -121,6 +132,7 @@ public:
             return;
         }
 
+        bool already_bond = false;
         std::unique_lock locker(m_mutex);
         for( auto it = m_upstream_signals.begin(); it != m_upstream_signals.end(); )
         {
@@ -134,16 +146,24 @@ public:
             if( ele.get() == a_signal.get() )
             {
                 // we already associtated.
-                return;
+                already_bond = true;
+                break;
             }
 
             ++it;
         }
 
-        m_upstream_signals.push_back(a_signal);
+        if( !already_bond )
+        {
+            m_upstream_signals.push_back(a_signal);
+        }
+
         locker.unlock();
 
-        a_signal->add_downstream( shared_from_this() );
+        if( !already_bond )
+        {
+            a_signal->add_downstream( shared_from_this() );
+        }
 
         if( a_signal->get_status() )
         {
@@ -203,6 +223,36 @@ public:
             }
 
             ++it;
+        }
+    }
+
+    void disconnect_all_signal()
+    {
+        auto thiz = shared_from_this();
+        std::vector<std::weak_ptr<associate_signal>> _upstream_signals;
+        std::vector<std::weak_ptr<associate_signal>> _downstream_signals;
+
+        std::unique_lock locker( m_mutex );
+        _upstream_signals = std::move( m_upstream_signals );
+        _downstream_signals = std::move( m_downstream_signals );
+        locker.unlock();
+
+        for( auto& ele : _downstream_signals )
+        {
+            auto sig = ele.lock();
+            if( sig )
+            {
+                sig->remove_upstream_signal(thiz);
+            }
+        }
+
+        for( auto& ele : _upstream_signals )
+        {
+            auto sig = ele.lock();
+            if( sig )
+            {
+                sig->remove_downstream_signal(thiz);
+            }
         }
     }
 
@@ -272,8 +322,8 @@ private:
         }
     }
 
-    mutable std::mutex m_mutex;
-    std::condition_variable m_condition;
+    mutable std::recursive_mutex m_mutex;
+    std::condition_variable_any m_condition;
     bool m_triggered = false;
     std::shared_ptr<user_data_type> m_user_data;
     uint64_t m_id = 0x00;
