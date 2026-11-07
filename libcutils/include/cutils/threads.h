@@ -88,6 +88,11 @@ CUTILS_EXPORT int nanosleep( const struct timespec* req, struct timespec* rem );
 
 #if defined(_WIN32)
 
+union sigval {
+int   sival_int;
+void* sival_ptr;
+};
+
 #define PTHREAD_MUTEX_INITIALIZER SRWLOCK_INIT
 #define PTHREAD_ONCE_INIT INIT_ONCE_STATIC_INIT
 
@@ -112,6 +117,14 @@ typedef struct
 {
     unsigned stack_size;
 } pthread_attr_t;
+
+struct sigevent {
+int          sigev_notify;        // Notification mode
+int          sigev_signo;         // Signal number, valid when SIGEV_SIGNAL is selected
+union sigval sigev_value;         // Supplementary value passed to notification callback or signal handler
+void ( *sigev_notify_function )( union sigval ); // Callback function invoked for SIGEV_THREAD
+pthread_attr_t * sigev_notify_attributes;     // Thread attributes used when creating thread for SIGEV_THREAD
+};
 
 #define SCHED_NORMAL 0
 #define SCHED_OTHER SCHED_NORMAL
@@ -146,6 +159,8 @@ CUTILS_EXPORT int dav1d_pthread_once( pthread_once_t* once_control,
 #define pthread_join(thread, res) dav1d_pthread_join(&(thread), res)
 #define pthread_once   dav1d_pthread_once
 
+CUTILS_EXPORT int sched_yield();
+
 CUTILS_EXPORT int pthread_attr_init( pthread_attr_t* const attr );
 
 CUTILS_EXPORT int pthread_attr_destroy( pthread_attr_t* const attr );
@@ -154,6 +169,8 @@ CUTILS_EXPORT int pthread_attr_setstacksize( pthread_attr_t* const attr,
                                              const size_t stack_size );
 
 CUTILS_EXPORT int pthread_attr_setdetachstate( pthread_attr_t* a, int state );
+
+CUTILS_EXPORT int pthread_attr_setinheritsched( pthread_attr_t* attr, int inheritsched );
 
 CUTILS_EXPORT int pthread_setname_np( pthread_t __pthread, const char* __name );
 
@@ -166,6 +183,8 @@ CUTILS_EXPORT int sched_get_priority_min( int policy );
 CUTILS_EXPORT int sched_get_priority_max( int policy );
 
 CUTILS_EXPORT int pthread_self();
+
+CUTILS_EXPORT int pthread_attr_setschedpolicy( pthread_attr_t* attr, int policy );
 
 #ifndef SCHED_FIFO
 #define SCHED_FIFO 1
@@ -191,6 +210,8 @@ CUTILS_EXPORT int pthread_mutex_lock( pthread_mutex_t* const mutex );
 
 CUTILS_EXPORT int pthread_mutex_timedlock( pthread_mutex_t* const mutex, struct timespec const* a_time );
 
+CUTILS_EXPORT int pthread_mutex_trylock( pthread_mutex_t* const mutex );
+
 CUTILS_EXPORT int pthread_mutex_unlock( pthread_mutex_t* const mutex );
 
 CUTILS_EXPORT int pthread_cond_init( pthread_cond_t* const cond,
@@ -208,15 +229,36 @@ CUTILS_EXPORT int pthread_cond_signal( pthread_cond_t* const cond );
 
 CUTILS_EXPORT int pthread_cond_broadcast( pthread_cond_t* const cond );
 
-#define PRIO_PROCESS 0   /* 操作对象为单个进程   */
-#define PRIO_PGRP    1   /* 操作对象为进程组     */
-#define PRIO_USER    2   /* 操作对象为用户所有进程 */
+CUTILS_EXPORT int pthread_exit( int code );
+
+#define PRIO_PROCESS 0   /* Target is a single process */
+#define PRIO_PGRP    1   /* Target is a process group */
+#define PRIO_USER    2   /* Target is all processes of a user */
 CUTILS_EXPORT int getpriority(int which, int who);
 
 CUTILS_EXPORT int setpriority( int which, int who, int nice );
 
 CUTILS_EXPORT int sched_getscheduler( pid_t pid );
 
+typedef struct sem_detail_t
+{
+    void* detail_sem;
+}sem_t;
+
+CUTILS_EXPORT int sem_init(sem_t* sem, int pshared, unsigned int value);
+
+CUTILS_EXPORT int sem_wait(sem_t* sem);
+
+CUTILS_EXPORT int sem_post(sem_t* sem);
+
+CUTILS_EXPORT int sem_destroy(sem_t* sem);
+
+typedef struct {
+ void* ss_sp;     /* Alternate signal stack buffer start address */
+ int    ss_flags;  /* Flags */
+ size_t ss_size;   /* Total size of stack buffer in bytes */
+} stack_t;
+CUTILS_EXPORT int sigaltstack(const stack_t* ss, stack_t* oss);
 #endif
 
 #ifdef __cplusplus

@@ -31,6 +31,7 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <semaphore>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -375,9 +376,25 @@ COLD int dav1d_pthread_once( pthread_once_t* const once_control,
     return !InitOnceComplete( once_control, 0, NULL );
 }
 
+int sched_yield()
+{
+    std::this_thread::yield();
+    return 0;
+}
+
 int pthread_attr_init( pthread_attr_t* const attr )
 {
     attr->stack_size = 0;
+    return 0;
+}
+
+int pthread_attr_setinheritsched( pthread_attr_t * attr, int inheritsched )
+{
+    return 0;
+}
+
+int pthread_attr_setschedpolicy(pthread_attr_t* attr, int policy)
+{
     return 0;
 }
 
@@ -508,6 +525,12 @@ int pthread_mutex_timedlock( pthread_mutex_t* const mutex, struct timespec const
     return 0;
 }
 
+int pthread_mutex_trylock( pthread_mutex_t* const mutex )
+{
+    auto result = TryAcquireSRWLockExclusive( mutex );
+    return ( result == TRUE ) ? 0 : -1;
+}
+
 int pthread_mutex_unlock( pthread_mutex_t* const mutex )
 {
     ReleaseSRWLockExclusive( mutex );
@@ -597,6 +620,12 @@ int pthread_cond_signal( pthread_cond_t* const cond )
 int pthread_cond_broadcast( pthread_cond_t* const cond )
 {
     WakeAllConditionVariable( cond );
+    return 0;
+}
+
+int pthread_exit( int code )
+{
+    ::ExitThread( (DWORD)code );
     return 0;
 }
 
@@ -759,6 +788,59 @@ int sched_getscheduler( pid_t pid )
 
     /* 2. ÆäÓàÈ«²¿Ëã SCHED_OTHER */
     return SCHED_OTHER;
+}
+
+int sigaltstack( const stack_t* ss, stack_t* oss )
+{
+    return 0;
+}
+
+int sem_init( sem_t* sem, int pshared, unsigned int value )
+{
+    if( sem == nullptr )
+        return -1;
+
+    if( value > static_cast<unsigned>( std::counting_semaphore<>::max() ) )
+    {
+        return -1;
+    }
+
+    sem->detail_sem = (void*)( new std::counting_semaphore<>( value ) );
+    return 0;
+}
+
+int sem_wait( sem_t* sem )
+{
+    std::counting_semaphore<>* detail_sema = nullptr;
+    if( sem == nullptr || sem->detail_sem == nullptr )
+        return -1;
+
+    detail_sema = reinterpret_cast<std::counting_semaphore<>*>( sem->detail_sem );
+    detail_sema->acquire();
+    return 0;
+}
+
+int sem_post( sem_t* sem )
+{
+    std::counting_semaphore<>* detail_sema = nullptr;
+    if( sem == nullptr || sem->detail_sem == nullptr )
+        return -1;
+
+    detail_sema = reinterpret_cast<std::counting_semaphore<>*>( sem->detail_sem );
+    detail_sema->release();
+    return 0;
+}
+
+int sem_destroy( sem_t* sem )
+{
+    std::counting_semaphore<>* detail_sema = nullptr;
+    if( sem == nullptr || sem->detail_sem == nullptr )
+        return -1;
+
+    detail_sema = reinterpret_cast<std::counting_semaphore<>*>( sem->detail_sem );
+    delete detail_sema;
+    sem->detail_sem = nullptr;
+    return 0;
 }
 
 }

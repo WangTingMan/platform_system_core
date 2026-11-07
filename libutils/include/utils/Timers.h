@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include <time.h>
 
+#include <cutils/threads.h>
 #include <utils/Compat.h>
 #include <utils/utils_export.h>
 
@@ -176,6 +177,25 @@ UTILS_EXPORT void set_timer( uint32_t timer_id, int milliseconds,
 UTILS_EXPORT int is_timer_scheduled( uint32_t timer_id );
 
 UTILS_EXPORT int get_timer_remaining_ms( uint32_t timer_id );
+
+typedef int timer_t;
+
+#ifndef SIGEV_THREAD
+#define SIGEV_THREAD 1
+#endif
+
+struct itimerspec {
+    struct timespec it_interval;  /* 定时器周期：每次到期之后的间隔 */
+    struct timespec it_value;    /* 首次到期延时：从启动到第一次触发的时间 */
+};
+
+UTILS_EXPORT int timer_create( clockid_t clockid, struct sigevent* sevp, timer_t* timerid );
+
+UTILS_EXPORT int timer_delete( timer_t timer_id );
+
+UTILS_EXPORT int timer_settime(timer_t timerid, int flags,
+        const struct itimerspec* new_value,
+        struct itimerspec* old_value);
 
 #ifdef __cplusplus
 } // extern "C"
