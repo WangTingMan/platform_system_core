@@ -820,6 +820,31 @@ int sem_wait( sem_t* sem )
     return 0;
 }
 
+int sem_trywait( sem_t* sem )
+{
+
+    std::counting_semaphore<>* detail_sema = nullptr;
+    if( sem == nullptr || sem->detail_sem == nullptr )
+        return -1;
+    detail_sema = reinterpret_cast<std::counting_semaphore<>*>( sem->detail_sem );
+    bool result = detail_sema->try_acquire();
+    return result ? 0 : -1;
+
+}
+
+int sem_timedwait( sem_t* sem, struct timespec* ts )
+{
+
+    auto wait_time = std::chrono::seconds( ts->tv_sec ) + std::chrono::nanoseconds( ts->tv_nsec );
+    std::counting_semaphore<>* detail_sema = nullptr;
+    if( sem == nullptr || sem->detail_sem == nullptr )
+        return -1;
+    detail_sema = reinterpret_cast<std::counting_semaphore<>*>( sem->detail_sem );
+    bool result = detail_sema->try_acquire_for( wait_time );
+    return result ? 0 : -1;
+
+}
+
 int sem_post( sem_t* sem )
 {
     std::counting_semaphore<>* detail_sema = nullptr;

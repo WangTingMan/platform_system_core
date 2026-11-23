@@ -249,6 +249,10 @@ CUTILS_EXPORT int sem_init(sem_t* sem, int pshared, unsigned int value);
 
 CUTILS_EXPORT int sem_wait(sem_t* sem);
 
+CUTILS_EXPORT int sem_trywait( sem_t* sem );
+
+CUTILS_EXPORT int sem_timedwait( sem_t* sem, struct timespec* ts );
+
 CUTILS_EXPORT int sem_post(sem_t* sem);
 
 CUTILS_EXPORT int sem_destroy(sem_t* sem);
